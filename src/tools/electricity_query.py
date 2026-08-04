@@ -14,13 +14,13 @@ from typing import TypedDict
 
 from openai import OpenAI
 
-from src.config import PRICE_TYPE_MAP, VLLM_BASE_URL
+from src.config import PRICE_TYPE_MAP, VLLM_BASE_URL, DATA_DIR
 from src.tools.web_search import web_search, web_fetch
 
 logger = logging.getLogger(__name__)
 
-# SQLite 数据库路径
-DB_PATH = Path(__file__).parent.parent.parent / "data" / "electricity_cache.db"
+# SQLite 数据库路径 — 优先持久化到 Google Drive
+DB_PATH = Path(DATA_DIR) / "electricity_cache.db"
 
 
 class PriceResult(TypedDict):

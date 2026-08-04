@@ -38,7 +38,12 @@ NGROK_TOKEN = _get_secret("NGROK_TOKEN", required=False)
 # ── 模型配置 ──────────────────────────────────────────────────
 
 MODEL_ID = "Qwen/Qwen2.5-3B-Instruct-AWQ"        # HF Hub 模型 ID
-MODEL_CACHE_DIR = "/content/drive/MyDrive/models"  # Colab Drive 缓存路径
+MODEL_CACHE_DIR = "/content/drive/MyDrive/models"  # Colab Drive 模型缓存路径
+DATA_DIR = os.environ.get(                          # 数据持久化目录（Drive 优先）
+    "NEW_ENERGY_DATA_DIR",
+    "/content/drive/MyDrive/new-energy-data"
+)
+os.makedirs(DATA_DIR, exist_ok=True)                  # 确保目录存在
 MODEL_MAX_LEN = 4096                               # vLLM 最大上下文长度
 VLLM_PORT = 8000                                   # vLLM API 端口
 VLLM_BASE_URL = f"http://localhost:{VLLM_PORT}/v1"
