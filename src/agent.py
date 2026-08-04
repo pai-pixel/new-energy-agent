@@ -315,11 +315,7 @@ CUSTOM_CSS = """
 def create_ui(agent: NewEnergyAgent) -> gr.Blocks:
     """构建 Gradio UI"""
 
-    with gr.Blocks(
-        css=CUSTOM_CSS,
-        title="新能源行业智能助手",
-        theme=gr.themes.Soft(primary_hue="green"),
-    ) as demo:
+    with gr.Blocks(title="新能源行业智能助手") as demo:
 
         gr.Markdown(
             """# ⚡ 新能源行业智能助手
@@ -332,7 +328,6 @@ def create_ui(agent: NewEnergyAgent) -> gr.Blocks:
                 chatbot = gr.Chatbot(
                     elem_classes=["chatbot"],
                     height=500,
-                    show_copy_button=True,
                     avatar_images=(None, "⚡"),
                     render_markdown=True,
                 )
@@ -447,7 +442,7 @@ def create_ui(agent: NewEnergyAgent) -> gr.Blocks:
 
 # ── 主入口 ─────────────────────────────────────────────────────
 
-def wait_for_vllm(max_retries: int = 30, interval: int = 2):
+def wait_for_vllm(max_retries: int = 60, interval: int = 5):
     """等待 vLLM 服务就绪"""
     from openai import OpenAI
     client = OpenAI(base_url=VLLM_BASE_URL, api_key="not-needed")
@@ -503,6 +498,8 @@ if __name__ == "__main__":
     demo.queue(max_size=32).launch(
         server_name="0.0.0.0",
         server_port=7860,
-        share=True,  # Gradio 自带公网 URL
+        share=True,
         show_error=True,
+        css=CUSTOM_CSS,
+        theme=gr.themes.Soft(primary_hue="green"),
     )
