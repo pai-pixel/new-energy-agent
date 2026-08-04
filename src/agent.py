@@ -249,8 +249,7 @@ def create_ui(agent: NewEnergyAgent) -> gr.Blocks:
                     elem_classes=["chatbot"],
                     height=550,
                     avatar_images=(None, "🤖"),
-                    render_markdown=True,
-                    type="messages"
+                    render_markdown=True
                 )
             with gr.Column(scale=3):
                 with gr.Accordion("📊 Data Visualization & Tables", open=False) as data_accordion:
@@ -281,15 +280,15 @@ def create_ui(agent: NewEnergyAgent) -> gr.Blocks:
                 yield history, gr.update(), gr.update(), gr.update(), "Enter a question"
                 return
             
-            history.append({"role": "user", "content": message.strip()})
-            history.append({"role": "assistant", "content": ""})
+            # Universal history format: list of [user_msg, assistant_msg]
+            history.append([message.strip(), ""])
             
             chart, table = None, None
             status = "Processing..."
             yield history, gr.update(), gr.update(), gr.update(), status
             
             for result in agent.process_stream(message.strip()):
-                history[-1]["content"] = result["text"]
+                history[-1][1] = result["text"]
                 chart = result["chart"]
                 table = result["table"]
                 status = result.get("status", "")
