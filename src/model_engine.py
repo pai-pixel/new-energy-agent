@@ -1,109 +1,132 @@
 """
-模型推理引擎 - transformers + autoawq 直接加载推理
-无需 vLLM，兼容 Colab T4 环境: numpy 1.26, torch 2.3, CUDA 12.1
+模型推理引擎 - 双后端自适应
+- transformers:  直接加载模型到内存 (兼容性最好，~25 tok/s)
+- vllm:          通过 OpenAI-compatible API (速度快，~40 tok/s)
+
+通过环境变量 INFERENCE_BACKEND 控制:
+  export INFERENCE_BACKEND=vllm        # vLLM API 模式
+  export INFERENCE_BACKEND=transformers # 直接加载模式 (默认)
 """
 
 import logging
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, TextStreamer
-from pathlib import Path
+import os
 
 logger = logging.getLogger(__name__)
 
-# 全局单例
-_model = None
-_tokenizer = None
-_device = None
+INFERENCE_BACKEND = os.environ.get("INFERENCE_BACKEND", "vllm")
+VLLM_API_URL = os.environ.get("VLLM_API_URL", "http://localhost:8000/v1")
+
+# ─── transformers 后端 (直接加载) ─────────────────────────────────
+
+_tf_model = None
+_tf_tokenizer = None
+_tf_device = None
 
 
-def load_model(model_path: str | None = None):
-    """加载 Qwen2.5-3B-Instruct-AWQ 模型 (仅一次)"""
-    global _model, _tokenizer, _device
+def _load_model_transformers(model_path: str | None = None):
+    """直接加载 AWQ 量化模型到 GPU"""
+    global _tf_model, _tf_tokenizer, _tf_device
+    if _tf_model is not None:
+        return _tf_model, _tf_tokenizer
 
-    if _model is not None:
-        logger.info("Model already loaded")
-        return _model, _tokenizer
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
 
     model_id = model_path or "Qwen/Qwen2.5-3B-Instruct-AWQ"
+    logger.info(f"[transformers] Loading: {model_id}")
 
-    logger.info(f"Loading model: {model_id}")
+    _tf_device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    _device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info(f"Device: {_device}")
-
-    _model = AutoModelForCausalLM.from_pretrained(
+    _tf_model = AutoModelForCausalLM.from_pretrained(
         model_id,
         torch_dtype=torch.float16,
         device_map="auto",
         trust_remote_code=True,
     )
-    _tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    _tf_tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    logger.info(f"[transformers] Loaded. VRAM: {torch.cuda.memory_allocated()/1e9:.1f} GB")
+    return _tf_model, _tf_tokenizer
 
-    logger.info(f"Model loaded. VRAM: {torch.cuda.memory_allocated()/1e9:.1f} GB")
-    return _model, _tokenizer
 
+def _generate_transformers(messages: list[dict], max_tokens: int = 1024, temperature: float = 0.7) -> str:
+    import torch
+    global _tf_model, _tf_tokenizer, _tf_device
+    if _tf_model is None:
+        _load_model_transformers()
 
-def generate(
-    messages: list[dict],
-    max_tokens: int = 1024,
-    temperature: float = 0.7,
-    stream: bool = False,
-) -> str:
-    """
-    推理接口 - ChatML 格式
-
-    Args:
-        messages: [{"role": "system", "content": "..."}, {"role": "user", "content": "..."}]
-        max_tokens: 最大生成 tokens
-        temperature: 温度
-        stream: 是否流式 (暂不支持)
-
-    Returns:
-        生成的文本
-    """
-    global _model, _tokenizer
-
-    if _model is None:
-        load_model()
-
-    # 用 tokenizer 的 chat template
-    text = _tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True,
-    )
-
-    inputs = _tokenizer(text, return_tensors="pt").to(_device)
+    text = _tf_tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    inputs = _tf_tokenizer(text, return_tensors="pt").to(_tf_device)
 
     with torch.no_grad():
-        outputs = _model.generate(
+        outputs = _tf_model.generate(
             **inputs,
             max_new_tokens=max_tokens,
             temperature=temperature if temperature > 0 else 0.1,
             do_sample=temperature > 0,
             top_p=0.9,
-            pad_token_id=_tokenizer.pad_token_id or _tokenizer.eos_token_id,
+            pad_token_id=_tf_tokenizer.pad_token_id or _tf_tokenizer.eos_token_id,
         )
 
-    # 去掉输入部分
     input_len = inputs.input_ids.shape[1]
-    generated_ids = outputs[0][input_len:]
-    response = _tokenizer.decode(generated_ids, skip_special_tokens=True)
-
-    return response.strip()
+    return _tf_tokenizer.decode(outputs[0][input_len:], skip_special_tokens=True).strip()
 
 
-def generate_json(
-    messages: list[dict],
-    max_tokens: int = 500,
-) -> str:
-    """低温度推理，用于结构化 JSON 输出"""
+# ─── vLLM 后端 (OpenAI-compatible API) ────────────────────────────
+
+_vllm_client = None
+
+
+def _get_vllm_client():
+    global _vllm_client
+    if _vllm_client is None:
+        from openai import OpenAI
+        _vllm_client = OpenAI(base_url=VLLM_API_URL, api_key="vllm")
+    return _vllm_client
+
+
+def _generate_vllm(messages: list[dict], max_tokens: int = 1024, temperature: float = 0.7) -> str:
+    client = _get_vllm_client()
+    resp = client.chat.completions.create(
+        model="qwen",
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
+    return resp.choices[0].message.content.strip()
+
+
+# ─── 统一接口 ─────────────────────────────────────────────────────
+
+
+def load_model(model_path: str | None = None):
+    """加载模型 (vLLM 模式下无需调用， transformers 模式下预加载)"""
+    if INFERENCE_BACKEND == "vllm":
+        logger.info("[vLLM] Model managed by vLLM server, skip local loading")
+        return None, None
+    return _load_model_transformers(model_path)
+
+
+def generate(messages: list[dict], max_tokens: int = 1024, temperature: float = 0.7) -> str:
+    """统一推理接口"""
+    if INFERENCE_BACKEND == "vllm":
+        return _generate_vllm(messages, max_tokens, temperature)
+    return _generate_transformers(messages, max_tokens, temperature)
+
+
+def generate_json(messages: list[dict], max_tokens: int = 500) -> str:
+    """低温度推理 (结构化 JSON)"""
     return generate(messages, max_tokens=max_tokens, temperature=0.0)
 
 
 def is_loaded() -> bool:
-    return _model is not None
+    if INFERENCE_BACKEND == "vllm":
+        try:
+            _get_vllm_client().models.list()
+            return True
+        except Exception:
+            return False
+    return _tf_model is not None
 
 
 def get_device() -> str:
-    return _device or "unknown"
+    return "cuda:vllm" if INFERENCE_BACKEND == "vllm" else (_tf_device or "unknown")

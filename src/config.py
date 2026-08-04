@@ -46,6 +46,10 @@ DATA_DIR = os.environ.get(                             # 数据持久化目录�
 os.makedirs(DATA_DIR, exist_ok=True)                   # 确保目录存在
 MODEL_MAX_TOKENS = 4096                                # 最大生成 tokens
 
+# 推理后端: "vllm" (快 ~40 tok/s) | "transformers" (稳 ~25 tok/s)
+# 通过环境变量 INFERENCE_BACKEND 控制，默认 vllm
+INFERENCE_BACKEND = os.environ.get("INFERENCE_BACKEND", "vllm")
+
 # ── 电价类型映射 ──────────────────────────────────────────────
 
 PRICE_TYPE_MAP = {
