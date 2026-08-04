@@ -71,6 +71,36 @@ def _generate_transformers(messages: list[dict], max_tokens: int = 1024, tempera
     return _tf_tokenizer.decode(outputs[0][input_len:], skip_special_tokens=True).strip()
 
 
+def _generate_transformers_stream(messages: list[dict], max_tokens: int = 1024, temperature: float = 0.7):
+    import torch
+    from threading import Thread
+    from transformers import TextIteratorStreamer
+    global _tf_model, _tf_tokenizer, _tf_device
+    if _tf_model is None:
+        _load_model_transformers()
+
+    text = _tf_tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    inputs = _tf_tokenizer(text, return_tensors="pt").to(_tf_device)
+
+    streamer = TextIteratorStreamer(_tf_tokenizer, skip_prompt=True, skip_special_tokens=True, timeout=10.0)
+
+    generation_kwargs = dict(
+        **inputs,
+        max_new_tokens=max_tokens,
+        temperature=temperature if temperature > 0 else 0.1,
+        do_sample=temperature > 0,
+        top_p=0.9,
+        pad_token_id=_tf_tokenizer.pad_token_id or _tf_tokenizer.eos_token_id,
+        streamer=streamer
+    )
+
+    thread = Thread(target=_tf_model.generate, kwargs=generation_kwargs)
+    thread.start()
+
+    for new_text in streamer:
+        yield new_text
+
+
 # ─── vLLM 后端 (OpenAI-compatible API) ────────────────────────────
 
 _vllm_client = None
@@ -95,6 +125,20 @@ def _generate_vllm(messages: list[dict], max_tokens: int = 1024, temperature: fl
     return resp.choices[0].message.content.strip()
 
 
+def _generate_vllm_stream(messages: list[dict], max_tokens: int = 1024, temperature: float = 0.7):
+    client = _get_vllm_client()
+    stream = client.chat.completions.create(
+        model="qwen",
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        stream=True
+    )
+    for chunk in stream:
+        if chunk.choices[0].delta.content is not None:
+            yield chunk.choices[0].delta.content
+
+
 # ─── 统一接口 ─────────────────────────────────────────────────────
 
 
@@ -111,6 +155,14 @@ def generate(messages: list[dict], max_tokens: int = 1024, temperature: float = 
     if INFERENCE_BACKEND == "vllm":
         return _generate_vllm(messages, max_tokens, temperature)
     return _generate_transformers(messages, max_tokens, temperature)
+
+
+def generate_stream(messages: list[dict], max_tokens: int = 1024, temperature: float = 0.7):
+    """统一推理流式接口"""
+    if INFERENCE_BACKEND == "vllm":
+        yield from _generate_vllm_stream(messages, max_tokens, temperature)
+    else:
+        yield from _generate_transformers_stream(messages, max_tokens, temperature)
 
 
 def generate_json(messages: list[dict], max_tokens: int = 500) -> str:

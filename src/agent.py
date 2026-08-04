@@ -26,8 +26,7 @@ from src.tools.weather_query import query_weather, format_weather_response
 from src.tools.web_search import web_search
 from src.visualization.chart_builder import build_trend_chart, build_comparison_chart
 from src.visualization.table_builder import build_price_table
-from src.model_engine import generate, generate_json, load_model, is_loaded
-
+from src.model_engine import generate, generate_json, generate_stream, load_model, is_loaded
 
 # ── Agent 核心 ─────────────────────────────────────────────────
 
@@ -43,7 +42,7 @@ class NewEnergyAgent:
         self.last_chart: go.Figure | None = None
         self.last_table: "pd.DataFrame | None" = None
 
-    def process(self, user_input: str) -> dict:
+    def process_stream(self, user_input: str):
         self.last_chart = None
         self.last_table = None
 
@@ -51,14 +50,16 @@ class NewEnergyAgent:
         blocked, reason = check_keywords(user_input)
         if blocked:
             logger.info(f"L1 block: {reason}")
-            return self._result(SAFETY_BLOCKED_MESSAGE, status="Blocked")
+            yield self._result(SAFETY_BLOCKED_MESSAGE, status="Blocked")
+            return
 
         # ─── L2: Intent classification + entity extraction ───
         try:
             intent_result = self.intent_router.classify(user_input, self.state)
         except Exception as e:
             logger.error(f"Intent classify failed: {e}")
-            return self._result("Sorry, please try again.", status="Error")
+            yield self._result("Sorry, please try again.", status="Error")
+            return
 
         intent = intent_result["intent"]
         entities = intent_result["entities"]
@@ -68,23 +69,26 @@ class NewEnergyAgent:
         # ─── L3: Domain boundary ───
         if intent == "out_of_domain":
             _, msg = check_domain_boundary("out_of_domain")
-            return self._result(msg, status="Out of domain")
+            yield self._result(msg, status="Out of domain")
+            return
 
         # ─── Update context state ───
         self.state = self.context_mgr.update(self.state, intent, entities, inherit)
+        status_text = self.context_mgr.get_status_text(self.state)
 
         # ─── Route to handler ───
         if intent == "price_query":
-            result = self._handle_price(entities)
+            res = self._handle_price(entities)
+            res["status"] = status_text
+            yield res
         elif intent == "weather_query":
-            result = self._handle_weather(entities)
+            res = self._handle_weather(entities)
+            res["status"] = status_text
+            yield res
         elif intent == "knowledge_query":
-            result = self._handle_knowledge(user_input)
+            yield from self._handle_knowledge_stream(user_input, status_text)
         else:
-            result = self._handle_chat(user_input)
-
-        result["status"] = self.context_mgr.get_status_text(self.state)
-        return result
+            yield from self._handle_chat_stream(user_input, status_text)
 
     def _result(self, text: str, chart=None, table=None, status: str = "") -> dict:
         self.last_chart = chart
@@ -162,19 +166,20 @@ class NewEnergyAgent:
 
     # ─── Knowledge query (search + LLM summary) ───
 
-    def _handle_knowledge(self, user_input: str) -> dict:
+    def _handle_knowledge_stream(self, user_input: str, status: str):
         results = web_search(f"new energy {user_input}", max_results=5)
 
         if not results:
             try:
-                resp = generate(
-                    [{"role": "system", "content": FINAL_RESPONSE_SYSTEM},
-                     {"role": "user", "content": user_input}],
-                    max_tokens=1024, temperature=0.7,
-                )
-                return self._result(resp)
+                messages = [{"role": "system", "content": FINAL_RESPONSE_SYSTEM}, {"role": "user", "content": user_input}]
+                text = ""
+                for chunk in generate_stream(messages, max_tokens=1024, temperature=0.7):
+                    text += chunk
+                    yield self._result(text, status=status)
+                return
             except Exception as e:
-                return self._result(f"Search and answer unavailable: {e}")
+                yield self._result(f"Search and answer unavailable: {e}", status=status)
+                return
 
         search_text = "\n\n".join(
             f"[{i}] {r['title']}\n{r['snippet']}\nSource: {r['url']}"
@@ -183,33 +188,34 @@ class NewEnergyAgent:
         system_prompt = KNOWLEDGE_QUERY_SYSTEM.replace("{search_results}", search_text)
 
         try:
-            resp = generate(
-                [{"role": "system", "content": system_prompt},
-                 {"role": "user", "content": user_input}],
-                max_tokens=1024, temperature=0.7,
-            )
-            return self._result(resp + "\n\n---\n*Based on web search, for reference only*")
+            messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_input}]
+            text = ""
+            for chunk in generate_stream(messages, max_tokens=1024, temperature=0.7):
+                text += chunk
+                yield self._result(text, status=status)
+            text += "\n\n---\n*Based on web search, for reference only*"
+            yield self._result(text, status=status)
         except Exception as e:
-            return self._result(f"## Search results for «{user_input}»\n\n{search_text}")
+            yield self._result(f"## Search results for «{user_input}»\n\n{search_text}", status=status)
 
     # ─── Chat ───
 
-    def _handle_chat(self, user_input: str) -> dict:
+    def _handle_chat_stream(self, user_input: str, status: str):
         try:
-            resp = generate(
-                [{"role": "system", "content": FINAL_RESPONSE_SYSTEM},
-                 {"role": "user", "content": user_input}],
-                max_tokens=512, temperature=0.8,
-            )
-            return self._result(resp)
+            messages = [{"role": "system", "content": FINAL_RESPONSE_SYSTEM}, {"role": "user", "content": user_input}]
+            text = ""
+            for chunk in generate_stream(messages, max_tokens=512, temperature=0.8):
+                text += chunk
+                yield self._result(text, status=status)
         except Exception:
-            return self._result(
+            yield self._result(
                 "Hi! I'm a new energy industry assistant.\n\n"
                 "I can help with:\n"
                 "Feed-in / Desulfurized coal / Commercial & industrial tariffs\n"
                 "Weather\n"
                 "New energy policy & knowledge\n\n"
-                "What can I help you with?"
+                "What can I help you with?",
+                status=status
             )
 
     def reset(self):
@@ -222,26 +228,36 @@ class NewEnergyAgent:
 
 
 def create_ui(agent: NewEnergyAgent) -> gr.Blocks:
-    with gr.Blocks(title="New Energy Agent") as demo:
+    custom_css = """
+    .gradio-container { max-width: 1000px !important; margin: auto; }
+    .chatbot { border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+    .status-bar { padding: 8px; font-weight: bold; color: #555; background: #f0f0f0; border-radius: 8px; text-align: center; margin-bottom: 10px; }
+    """
+    with gr.Blocks(title="New Energy Agent", theme=gr.themes.Soft(primary_hue="green"), css=custom_css) as demo:
 
         gr.Markdown(
-            "# New Energy Industry Assistant\n"
+            "# ⚡ New Energy Industry Assistant\n"
             "Feed-in tariff | Desulfurized coal | Commercial & industrial | Weather | Policy"
         )
 
+        status_bar = gr.Markdown("🟢 Ready | Waiting for input...", elem_classes=["status-bar"])
+
         with gr.Row():
-            with gr.Column(scale=4):
+            with gr.Column(scale=5):
                 chatbot = gr.Chatbot(
                     elem_classes=["chatbot"],
-                    height=500,
-                    avatar_images=(None, "⚡"),
+                    height=550,
+                    avatar_images=(None, "🤖"),
                     render_markdown=True,
+                    type="messages"
                 )
             with gr.Column(scale=3):
-                plot_output = gr.Plot(label="Price Trend")
-                table_output = gr.Dataframe(label="Data", wrap=True)
-
-        status_bar = gr.Markdown("Waiting... | Round 0", elem_classes=["status-bar"])
+                with gr.Accordion("📊 Data Visualization & Tables", open=False) as data_accordion:
+                    with gr.Tabs():
+                        with gr.TabItem("📈 Price Trend"):
+                            plot_output = gr.Plot(label="Price Trend")
+                        with gr.TabItem("📋 Detailed Data"):
+                            table_output = gr.Dataframe(label="Data", wrap=True)
 
         with gr.Row():
             msg_input = gr.Textbox(placeholder="e.g. Shanghai feed-in tariff / Beijing weather", scale=5, show_label=False)
@@ -249,10 +265,10 @@ def create_ui(agent: NewEnergyAgent) -> gr.Blocks:
             clear_btn = gr.Button("Clear", variant="secondary", scale=1)
 
         with gr.Row():
-            gr.Button("Feed-in", size="sm").click(lambda: "feed-in ", None, msg_input)
-            gr.Button("Desulfurized Coal", size="sm").click(lambda: "desulfurized coal ", None, msg_input)
-            gr.Button("Commercial", size="sm").click(lambda: "commercial ", None, msg_input)
-            gr.Button("Weather", size="sm").click(lambda: "weather ", None, msg_input)
+            btn_feedin = gr.Button("Feed-in", size="sm")
+            btn_coal = gr.Button("Desulfurized Coal", size="sm")
+            btn_com = gr.Button("Commercial", size="sm")
+            btn_weather = gr.Button("Weather", size="sm")
 
         gr.Examples(
             examples=["Shanghai feed-in tariff", "Jiangsu desulfurized coal price", "Beijing weather", "Solar subsidy policy"],
@@ -261,21 +277,45 @@ def create_ui(agent: NewEnergyAgent) -> gr.Blocks:
 
         def on_message(message: str, history: list):
             if not message.strip():
-                yield history, gr.update(), gr.update(), "Enter a question"
+                yield history, gr.update(), gr.update(), gr.update(), "Enter a question"
                 return
-            result = agent.process(message.strip())
-            history.append([message, result["text"]])
-            chart_upd = gr.update(value=result["chart"], visible=result["chart"] is not None) if result["chart"] else gr.update(visible=False)
-            table_upd = gr.update(value=result["table"], visible=result["table"] is not None) if result["table"] is not None else gr.update(visible=False)
-            yield history, chart_upd, table_upd, result.get("status", "")
+            
+            history.append({"role": "user", "content": message.strip()})
+            history.append({"role": "assistant", "content": ""})
+            
+            chart, table = None, None
+            status = "Processing..."
+            yield history, gr.update(), gr.update(), gr.update(), status
+            
+            for result in agent.process_stream(message.strip()):
+                history[-1]["content"] = result["text"]
+                chart = result["chart"]
+                table = result["table"]
+                status = result.get("status", "")
+                
+                accordion_upd = gr.update(open=True) if chart or table is not None else gr.update()
+                chart_upd = gr.update(value=chart, visible=chart is not None) if chart else gr.update(visible=False)
+                table_upd = gr.update(value=table, visible=table is not None) if table is not None else gr.update(visible=False)
+                
+                yield history, chart_upd, table_upd, accordion_upd, status
 
         def on_clear():
             agent.reset()
-            return [], gr.update(visible=False), gr.update(visible=False), "Waiting... | Round 0"
+            return [], gr.update(visible=False), gr.update(visible=False), gr.update(open=False), "🟢 Ready | Waiting for input..."
 
-        msg_input.submit(on_message, [msg_input, chatbot], [chatbot, plot_output, table_output, status_bar]).then(lambda: "", None, msg_input)
-        send_btn.click(on_message, [msg_input, chatbot], [chatbot, plot_output, table_output, status_bar]).then(lambda: "", None, msg_input)
-        clear_btn.click(on_clear, None, [chatbot, plot_output, table_output, status_bar])
+        submit_events = [
+            msg_input.submit(on_message, [msg_input, chatbot], [chatbot, plot_output, table_output, data_accordion, status_bar]),
+            send_btn.click(on_message, [msg_input, chatbot], [chatbot, plot_output, table_output, data_accordion, status_bar]),
+            btn_feedin.click(lambda: "feed-in ", None, msg_input).then(on_message, [msg_input, chatbot], [chatbot, plot_output, table_output, data_accordion, status_bar]),
+            btn_coal.click(lambda: "desulfurized coal ", None, msg_input).then(on_message, [msg_input, chatbot], [chatbot, plot_output, table_output, data_accordion, status_bar]),
+            btn_com.click(lambda: "commercial ", None, msg_input).then(on_message, [msg_input, chatbot], [chatbot, plot_output, table_output, data_accordion, status_bar]),
+            btn_weather.click(lambda: "weather ", None, msg_input).then(on_message, [msg_input, chatbot], [chatbot, plot_output, table_output, data_accordion, status_bar])
+        ]
+        
+        for ev in submit_events:
+            ev.then(lambda: "", None, msg_input)
+
+        clear_btn.click(on_clear, None, [chatbot, plot_output, table_output, data_accordion, status_bar])
 
         gr.Markdown("New Energy Industry Assistant | Public data & wttr.in | AI content for reference only")
 
