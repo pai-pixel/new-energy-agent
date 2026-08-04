@@ -281,14 +281,15 @@ def create_ui(agent: NewEnergyAgent) -> gr.Blocks:
                 return
             
             # Universal history format: list of [user_msg, assistant_msg]
-            history.append([message.strip(), ""])
+            history.append({"role": "user", "content": message.strip()})
+            history.append({"role": "assistant", "content": ""})
             
             chart, table = None, None
             status = "Processing..."
             yield history, gr.update(), gr.update(), gr.update(), status
             
             for result in agent.process_stream(message.strip()):
-                history[-1][1] = result["text"]
+                history[-1]["content"] = result["text"]
                 chart = result["chart"]
                 table = result["table"]
                 status = result.get("status", "")
