@@ -233,7 +233,8 @@ def create_ui(agent: NewEnergyAgent) -> gr.Blocks:
     .chatbot { border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
     .status-bar { padding: 8px; font-weight: bold; color: #555; background: #f0f0f0; border-radius: 8px; text-align: center; margin-bottom: 10px; }
     """
-    with gr.Blocks(title="New Energy Agent", theme=gr.themes.Soft(primary_hue="green"), css=custom_css) as demo:
+    # Note: theme and css are passed to launch() in the notebook
+    with gr.Blocks(title="New Energy Agent") as demo:
 
         gr.Markdown(
             "# ⚡ New Energy Industry Assistant\n"
@@ -248,8 +249,7 @@ def create_ui(agent: NewEnergyAgent) -> gr.Blocks:
                     elem_classes=["chatbot"],
                     height=550,
                     avatar_images=(None, "🤖"),
-                    render_markdown=True,
-                    type="messages"
+                    render_markdown=True
                 )
             with gr.Column(scale=3):
                 with gr.Accordion("📊 Data Visualization & Tables", open=False) as data_accordion:
@@ -280,15 +280,15 @@ def create_ui(agent: NewEnergyAgent) -> gr.Blocks:
                 yield history, gr.update(), gr.update(), gr.update(), "Enter a question"
                 return
             
-            history.append({"role": "user", "content": message.strip()})
-            history.append({"role": "assistant", "content": ""})
+            # Universal history format: list of [user_msg, assistant_msg]
+            history.append([message.strip(), ""])
             
             chart, table = None, None
             status = "Processing..."
             yield history, gr.update(), gr.update(), gr.update(), status
             
             for result in agent.process_stream(message.strip()):
-                history[-1]["content"] = result["text"]
+                history[-1][1] = result["text"]
                 chart = result["chart"]
                 table = result["table"]
                 status = result.get("status", "")
