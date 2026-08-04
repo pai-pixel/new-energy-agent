@@ -1,0 +1,21 @@
+# 推理引擎
+vllm>=0.6.0
+
+# Web 框架
+gradio>=4.0.0
+
+# 可视化
+plotly>=5.18.0
+pandas>=2.0.0
+
+# 工具
+duckduckgo_search>=5.0.0
+requests>=2.31.0
+httpx>=0.25.0
+
+# Colab 部署
+pyngrok>=7.0.0
+huggingface_hub>=0.20.0
+
+# OpenAI 兼容客户端 (调用 vLLM)
+openai>=1.0.0

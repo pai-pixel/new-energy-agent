@@ -1,0 +1,25 @@
+# 环境变量 (真实值)
+.env
+
+# SQLite 缓存
+*.db
+*.db-journal
+*.db-wal
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Colab
+.colab/
