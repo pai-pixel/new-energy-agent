@@ -13,7 +13,6 @@ import os
 
 logger = logging.getLogger(__name__)
 
-INFERENCE_BACKEND = os.environ.get("INFERENCE_BACKEND", "vllm")
 VLLM_API_URL = os.environ.get("VLLM_API_URL", "http://localhost:8000/v1")
 
 # ─── transformers 后端 (直接加载) ─────────────────────────────────
@@ -144,7 +143,7 @@ def _generate_vllm_stream(messages: list[dict], max_tokens: int = 1024, temperat
 
 def load_model(model_path: str | None = None):
     """加载模型 (vLLM 模式下无需调用， transformers 模式下预加载)"""
-    if INFERENCE_BACKEND == "vllm":
+    if os.environ.get("INFERENCE_BACKEND", "vllm") == "vllm":
         logger.info("[vLLM] Model managed by vLLM server, skip local loading")
         return None, None
     return _load_model_transformers(model_path)
@@ -152,14 +151,14 @@ def load_model(model_path: str | None = None):
 
 def generate(messages: list[dict], max_tokens: int = 1024, temperature: float = 0.7) -> str:
     """统一推理接口"""
-    if INFERENCE_BACKEND == "vllm":
+    if os.environ.get("INFERENCE_BACKEND", "vllm") == "vllm":
         return _generate_vllm(messages, max_tokens, temperature)
     return _generate_transformers(messages, max_tokens, temperature)
 
 
 def generate_stream(messages: list[dict], max_tokens: int = 1024, temperature: float = 0.7):
     """统一推理流式接口"""
-    if INFERENCE_BACKEND == "vllm":
+    if os.environ.get("INFERENCE_BACKEND", "vllm") == "vllm":
         yield from _generate_vllm_stream(messages, max_tokens, temperature)
     else:
         yield from _generate_transformers_stream(messages, max_tokens, temperature)
@@ -171,7 +170,7 @@ def generate_json(messages: list[dict], max_tokens: int = 500) -> str:
 
 
 def is_loaded() -> bool:
-    if INFERENCE_BACKEND == "vllm":
+    if os.environ.get("INFERENCE_BACKEND", "vllm") == "vllm":
         try:
             _get_vllm_client().models.list()
             return True
@@ -181,4 +180,4 @@ def is_loaded() -> bool:
 
 
 def get_device() -> str:
-    return "cuda:vllm" if INFERENCE_BACKEND == "vllm" else (_tf_device or "unknown")
+    return "cuda:vllm" if os.environ.get("INFERENCE_BACKEND", "vllm") == "vllm" else (_tf_device or "unknown")
