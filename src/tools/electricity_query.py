@@ -12,10 +12,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import TypedDict
 
-from openai import OpenAI
-
-from src.config import PRICE_TYPE_MAP, VLLM_BASE_URL, DATA_DIR
+from src.config import PRICE_TYPE_MAP, DATA_DIR
 from src.tools.web_search import web_search, web_fetch
+from src.model_engine import generate_json
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +121,7 @@ def _cache_get_trend(province: str, price_type: str, months: int = 6) -> list[di
 
 def _extract_price_with_llm(text: str, province: str, price_type: str) -> dict | None:
     """
-    用 vLLM 从网页文本中提取电价数字
+    用本地模型从网页文本中提取电价数字
     返回 {"price": float, "unit": str, "confidence": str} 或 None
     """
     prompt = f"""你是一个电价数据提取专家。从以下网页文本中提取 **{province}** 的 **{PRICE_TYPE_MAP.get(price_type, price_type)}** 数据。
@@ -142,14 +141,10 @@ def _extract_price_with_llm(text: str, province: str, price_type: str) -> dict |
 ---"""
 
     try:
-        client = OpenAI(base_url=VLLM_BASE_URL, api_key="not-needed")
-        resp = client.chat.completions.create(
-            model="qwen",
-            messages=[{"role": "user", "content": prompt}],
+        content = generate_json(
+            [{"role": "user", "content": prompt}],
             max_tokens=500,
-            temperature=0.1,
         )
-        content = resp.choices[0].message.content.strip()
         # 提取 JSON
         json_match = re.search(r'\{[^{}]*"price"[^{}]*\}', content, re.DOTALL)
         if json_match:
