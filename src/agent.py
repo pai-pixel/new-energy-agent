@@ -128,16 +128,24 @@ class NewEnergyAgent:
             province = normalize_province(args.get("province", ""))
             price_type = args.get("price_type", "feed_in")
             month = args.get("month") or datetime.now().strftime("%Y-%m")
+            pt_name = PRICE_TYPE_MAP.get(price_type, price_type)
             result = query_electricity_price(province, month, price_type)
-            if result["price"] is not None:
-                pt_name = PRICE_TYPE_MAP.get(price_type, price_type)
-                cache_tag = "⚡缓存" if result["cached"] else "🌐实时搜索"
+
+            if result["price"] is not None and result["price"] > 0:
+                # DB 缓存命中 — 直接返回价格
                 return (
-                    f"[{cache_tag}] {province} {month} {pt_name}："
+                    f"[⚡缓存] {province} {month} {pt_name}："
                     f"**{result['price']:.4f} 元/千瓦时**\n"
-                    f"来源：{result['source']}"
+                    f"来源：{result.get('source', '')}"
                 )
-            return f"未搜索到 {province} {month} 的电价数据，请尝试调整月份或电价类型。"
+            elif result.get("price") == -1:
+                # price=-1 是特殊标记：Web 搜到了结果，但价格需要 DeepSeek 从摘要中提取
+                return (
+                    f"[🌐实时搜索] 以下是为「{province} {month} {pt_name}」搜索到的结果，"
+                    f"请从摘要中提取准确电价并回复用户：\n\n{result['source']}"
+                )
+            else:
+                return f"未搜索到 {province} {month} 的 {pt_name} 数据。"
 
         elif name == "query_weather":
             city = args.get("city", "北京")

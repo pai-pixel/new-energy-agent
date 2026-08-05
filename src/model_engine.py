@@ -57,8 +57,8 @@ def generate(messages: list[dict], max_tokens: int = 1024, temperature: float = 
 
 
 def generate_json(messages: list[dict], max_tokens: int = 500) -> str:
-    """低温度推理 (结构化 JSON 输出)"""
-    return generate(messages, max_tokens=max_tokens, temperature=0.0)
+    """低温度推理 (结构化 JSON 输出)。注意：DeepSeek v4 不支持 temperature=0，用 0.1 代替"""
+    return generate(messages, max_tokens=max_tokens, temperature=0.1)
 
 
 def load_model(model_path: Optional[str] = None):

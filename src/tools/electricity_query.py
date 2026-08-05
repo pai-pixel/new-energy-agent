@@ -8,17 +8,13 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import re
-import time
 from datetime import datetime
 from typing import Optional, TypedDict
 
 from src.config import PRICE_TYPE_MAP
 from data.db import query_price, query_latest_price, query_trend, insert_price
-from src.tools.web_search import web_search, web_fetch
-from src.model_engine import generate_json
+from src.tools.web_search import web_search
 
 logger = logging.getLogger(__name__)
 
@@ -74,40 +70,7 @@ def _extract_price_with_llm(text: str, province: str, price_type: str) -> dict |
         return None
 
 
-# ── Web 搜索兜底 ───────────────────────────────────────────────
-
-
-def _search_and_extract(province: str, year_month: str, price_type: str) -> tuple[float | None, str]:
-    """Web 搜索 + LLM 提取电价，返回 (price, source)"""
-    price_type_name = PRICE_TYPE_MAP.get(price_type, price_type)
-    query = f"{province} {price_type_name} {year_month} 元/千瓦时"
-    results = web_search(query, max_results=5)
-
-    if not results:
-        return None, ""
-
-    for r in results[:3]:
-        url = r.get("url", "")
-        if not url:
-            continue
-        try:
-            page_text = web_fetch(url, timeout=12)
-            if not page_text or len(page_text) < 100:
-                continue
-        except Exception as e:
-            logger.info(f"跳过 {url[:50]}...: {e}")
-            continue
-
-        llm_result = _extract_price_with_llm(page_text, province, price_type)
-        if llm_result and llm_result.get("price") is not None:
-            price = float(llm_result["price"])
-            source = f"{r.get('title', '')} - {url}"
-            confidence = llm_result.get("confidence", "medium")
-            logger.info(f"Web 提取成功: {price} 元/千瓦时 (confidence={confidence})")
-            return price, source
-        time.sleep(0.3)
-
-    return None, ""
+# ── 搜索结果直接传给 Agent（不单独抽取，由 DeepSeek 在对话中直接提取）
 
 
 # ── 主查询函数 ─────────────────────────────────────────────────
@@ -115,36 +78,22 @@ def _search_and_extract(province: str, year_month: str, price_type: str) -> tupl
 
 def query_electricity_price(province: str, year_month: str, price_type: str) -> PriceResult:
     """
-    电价查询 - 本地数据库优先，Web 搜索兜底
-
-    Args:
-        province: 省份名称 (如 "江苏", "上海")
-        year_month: 查询月份 (如 "2026-08", 默认当月)
-        price_type: feed_in | desulfurized_coal | commercial_industrial
-
-    Returns:
-        PriceResult
+    电价查询 - DB 缓存优先 + Web 搜索兜底。
+    搜索结果直接返回给 DeepSeek 提取电价，不再抓网页 + LLM 提取。
     """
     price_type_name = PRICE_TYPE_MAP.get(price_type, price_type)
     search_used = False
 
     # 1. 查询本地数据库
     result = query_price(province, year_month, price_type)
-
     if result:
         trend = query_trend(province, price_type)
-        logger.info(f"✅ 数据库命中: {province} {year_month} {price_type_name} = {result['price']}")
+        logger.info(f"✅ DB命中: {province} {year_month} {price_type_name} = {result['price']}")
         return {
-            "province": province,
-            "year_month": year_month,
-            "price_type": price_type,
-            "price_type_name": price_type_name,
-            "price": result["price"],
-            "unit": result["unit"],
-            "source": result.get("source", "本地数据库"),
-            "cached": True,
-            "trend": trend,
-            "search_used": False,
+            "province": province, "year_month": year_month, "price_type": price_type,
+            "price_type_name": price_type_name, "price": result["price"],
+            "unit": result["unit"], "source": result.get("source", "本地数据库"),
+            "cached": True, "trend": trend, "search_used": False,
         }
 
     # 2. 数据库中无此月数据，尝试查最新月
@@ -153,39 +102,37 @@ def query_electricity_price(province: str, year_month: str, price_type: str) -> 
         trend = query_trend(province, price_type)
         logger.info(f"⚠️ 无 {year_month} 数据，返回最新: {latest['year_month']}")
         return {
-            "province": province,
-            "year_month": latest["year_month"],
-            "price_type": price_type,
-            "price_type_name": price_type_name,
-            "price": latest["price"],
-            "unit": latest["unit"],
-            "source": latest.get("source", "本地数据库"),
-            "cached": True,
-            "trend": trend,
-            "search_used": False,
+            "province": province, "year_month": latest["year_month"], "price_type": price_type,
+            "price_type_name": price_type_name, "price": latest["price"],
+            "unit": latest["unit"], "source": latest.get("source", "本地数据库"),
+            "cached": True, "trend": trend, "search_used": False,
         }
 
-    # 3. 本地数据库完全无数据，Web 搜索兜底
-    logger.info(f"🔍 数据库中无 {province} {price_type_name} 数据，Web 搜索兜底")
+    # 3. DB 无数据 → Web 搜索（两次尝试：精确+宽泛）
+    logger.info(f"🔍 无 {province} {price_type_name} 缓存，搜索真实数据...")
     search_used = True
-    web_price, web_source = _search_and_extract(province, year_month, price_type)
 
-    if web_price is not None:
-        # 写入数据库以便下次使用
-        insert_price(province, year_month, price_type, web_price,
-                     "元/千瓦时", web_source)
-        trend = query_trend(province, price_type)
+    # 第一次：精确搜索（不含月份，中文网页用"2025年"而非"2025-01"）
+    search_results = web_search(f"{province} {price_type_name} 元/千瓦时 最新", max_results=5)
+
+    # 第二次：如果第一次没结果，换更宽泛的关键词
+    if not search_results:
+        logger.info("   第一次无结果，尝试宽泛搜索...")
+        search_results = web_search(f"{province} {price_type_name} 电价", max_results=5)
+
+    if search_results:
+        source_text = "\n\n".join(
+            f"[{i}] {r['title']}\n{r['snippet']}\n链接: {r['url']}"
+            for i, r in enumerate(search_results, 1)
+        )
+        logger.info(f"搜索到 {len(search_results)} 条结果，交给 Agent 提取价格")
         return {
-            "province": province,
-            "year_month": year_month,
-            "price_type": price_type,
+            "province": province, "year_month": year_month, "price_type": price_type,
             "price_type_name": price_type_name,
-            "price": web_price,
+            "price": -1,  # 特殊标记：表示"有搜索结果待提取"
             "unit": "元/千瓦时",
-            "source": web_source,
-            "cached": False,
-            "trend": trend,
-            "search_used": True,
+            "source": source_text,
+            "cached": False, "trend": [], "search_used": True,
         }
 
     return _empty_result(province, year_month, price_type, price_type_name, search_used=True)
