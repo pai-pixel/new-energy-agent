@@ -170,24 +170,33 @@ class NewEnergyAgent:
             return {"text": SAFETY_BLOCKED_MESSAGE, "status": "Blocked"}
 
         self.messages.append({"role": "user", "content": user_input})
-        full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + self.messages[-40:]
-
         client = _get_client()
         model = get_model_name()
 
-        try:
-            resp = client.chat.completions.create(
-                model=model, messages=full_messages, tools=TOOLS,
-                max_tokens=2048, temperature=0.7,
-            )
-        except Exception as e:
-            logger.error(f"API 调用失败: {e}")
-            self.messages.pop()
-            return {"text": f"请求失败，请稍后重试。错误：{e}", "status": "Error"}
+        # 循环调用 API，直到模型不再要求调用工具（最多 5 轮，防无限循环）
+        max_rounds = 5
+        for round_num in range(max_rounds):
+            full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + self.messages[-40:]
 
-        msg = resp.choices[0].message
+            try:
+                resp = client.chat.completions.create(
+                    model=model, messages=full_messages, tools=TOOLS,
+                    max_tokens=2048, temperature=0.7,
+                )
+            except Exception as e:
+                logger.error(f"API 调用失败: {e}")
+                self.messages.pop()
+                return {"text": f"请求失败: {e}", "status": "Error"}
 
-        if msg.tool_calls:
+            msg = resp.choices[0].message
+
+            # 没有工具调用 → 最终回复
+            if not msg.tool_calls:
+                reply = msg.content or ""
+                self.messages.append({"role": "assistant", "content": reply})
+                return {"text": self._clean_output(reply), "status": ""}
+
+            # 有工具调用 → 执行工具，继续循环
             clean_content = msg.content or ""
             if clean_content:
                 clean_content = re.sub(
@@ -215,23 +224,18 @@ class NewEnergyAgent:
                     "role": "tool", "tool_call_id": tc.id, "content": tool_result,
                 })
 
-            try:
-                resp2 = client.chat.completions.create(
-                    model=model,
-                    messages=[{"role": "system", "content": SYSTEM_PROMPT}] + self.messages[-42:],
-                    max_tokens=2048, temperature=0.7,
-                )
-                final_text = resp2.choices[0].message.content or ""
-            except Exception as e:
-                logger.error(f"二次调用失败: {e}")
-                final_text = f"查询到数据但无法生成回复：{e}"
-
-            self.messages.append({"role": "assistant", "content": final_text})
-            return {"text": self._clean_output(final_text), "status": "工具调用完成"}
-
-        reply = msg.content or ""
-        self.messages.append({"role": "assistant", "content": reply})
-        return {"text": self._clean_output(reply), "status": ""}
+        # 超过最大轮数仍未结束 → 最后一次调用
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "system", "content": SYSTEM_PROMPT}] + self.messages[-42:],
+                max_tokens=2048, temperature=0.7,
+            )
+            final_text = resp.choices[0].message.content or ""
+        except Exception as e:
+            final_text = f"查询超时: {e}"
+        self.messages.append({"role": "assistant", "content": final_text})
+        return {"text": self._clean_output(final_text), "status": ""}
 
     def _clean_output(self, text: str) -> str:
         return re.sub(
