@@ -112,7 +112,7 @@ def query_electricity_price(province: str, year_month: str, price_type: str) -> 
     logger.info(f"🔍 无 {province} {price_type_name} 缓存，搜索真实数据...")
     search_used = True
 
-    # 第一次：精确搜索（不含月份，中文网页用"2025年"而非"2025-01"）
+    # 第一次：精确搜索
     search_results = web_search(f"{province} {price_type_name} 元/千瓦时 最新", max_results=5)
 
     # 第二次：如果第一次没结果，换更宽泛的关键词
