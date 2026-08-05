@@ -2,6 +2,8 @@
 表格构建器 - 电价查询结果 DataFrame 格式化
 """
 
+from __future__ import annotations
+
 import pandas as pd
 
 from src.config import PRICE_TYPE_MAP

@@ -3,9 +3,11 @@
 无需注册，无调用次数限制，支持中文城市名
 """
 
+from __future__ import annotations
+
 import logging
 from datetime import datetime, timedelta
-from typing import TypedDict
+from typing import TypedDict, Union
 
 import httpx
 
@@ -36,7 +38,7 @@ CONDITION_MAP = {
     "Partly Cloudy": "多云",
     "Cloudy": "阴",
     "Overcast": "阴",
-    "Mist": "雾",
+    "Mist": "薄雾",
     "Fog": "雾",
     "Light rain": "小雨",
     "Light Rain": "小雨",
@@ -44,10 +46,32 @@ CONDITION_MAP = {
     "Heavy rain": "大雨",
     "Light drizzle": "毛毛雨",
     "Patchy rain possible": "可能有阵雨",
+    "Patchy rain nearby": "局部阵雨",
     "Patchy light rain": "局部小雨",
+    "Patchy light rain with thunder": "局部雷阵雨",
     "Thunderstorm": "雷阵雨",
+    "Moderate or heavy rain with thunder": "中到大雨伴雷",
     "Snow": "雪",
     "Light snow": "小雪",
+    "Moderate snow": "中雪",
+    "Heavy snow": "大雪",
+    "Ice pellets": "冰粒",
+    "Light rain shower": "小阵雨",
+    "Moderate or heavy rain shower": "中到大阵雨",
+    "Torrential rain shower": "暴雨",
+    "Light sleet": "小雨夹雪",
+    "Light sleet showers": "小冰粒阵雨",
+    "Smoke": "烟霾",
+    "Haze": "霾",
+    "Smoky haze": "烟霾",
+    "Sandstorm": "沙尘暴",
+    "Dust storm": "沙尘暴",
+    "Fog": "雾",
+    "Freezing fog": "冰雾",
+    "Blizzard": "暴风雪",
+    "Blowing snow": "吹雪",
+    "Drizzle": "毛毛雨",
+    "Windy": "大风",
 }
 
 
@@ -83,7 +107,7 @@ def query_weather(city: str) -> WeatherResult | dict:
         weather = raw["weather"][0]
         hourly = weather.get("hourly", [])
 
-        condition_en = current["weatherDesc"][0]["value"]
+        condition_en = current["weatherDesc"][0]["value"].strip()
         condition_cn = CONDITION_MAP.get(condition_en, condition_en)
 
         result: WeatherResult = {
@@ -118,12 +142,15 @@ def _parse_hourly(hourly: list) -> str:
     if not hourly:
         return ""
     parts = []
-    for h in hourly[:8]:  # 只取前8小时
-        time_str = h.get("time", "0")[:2]  # 取小时
+    for h in hourly[:8]:
+        raw_time = h.get("time", "0")
+        # wttr.in 返回 "0", "100", "200", ..., "2300" 格式
+        time_val = int(raw_time)
+        hour = time_val // 100
         temp = h.get("tempC", "?")
-        desc_en = h.get("weatherDesc", [{}])[0].get("value", "")
+        desc_en = h.get("weatherDesc", [{}])[0].get("value", "").strip()
         desc_cn = CONDITION_MAP.get(desc_en, desc_en)
-        parts.append(f"{time_str}时 {desc_cn} {temp}°C")
+        parts.append(f"{hour}时 {desc_cn} {temp}°C")
     return " → ".join(parts)
 
 

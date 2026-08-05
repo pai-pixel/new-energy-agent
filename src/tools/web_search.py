@@ -1,10 +1,12 @@
 """
-Web 搜索工具 - DuckDuckGo 搜索 + 页面抓取
+Web 搜索工具 - httpx 直连 DuckDuckGo HTML
 用于电价实时查询和新能源政策知识检索
 """
 
 import logging
+import re
 from typing import TypedDict
+from urllib.parse import unquote
 
 import httpx
 
@@ -19,9 +21,87 @@ class SearchResult(TypedDict):
 
 def web_search(query: str, max_results: int = 5) -> list[SearchResult]:
     """
-    DuckDuckGo 文本搜索
-    返回: [{"title": ..., "url": ..., "snippet": ...}, ...]
+    DuckDuckGo 搜索
+    1. 优先: httpx 直连 html.duckduckgo.com
+    2. 兜底: duckduckgo_search 库
     """
+    results = _search_via_html(query, max_results)
+    if results:
+        return results
+
+    results = _search_via_lib(query, max_results)
+    if results:
+        return results
+
+    logger.warning(f"所有搜索方式均无结果: {query}")
+    return []
+
+
+def _search_via_html(query: str, max_results: int) -> list[SearchResult]:
+    """httpx 直连 DuckDuckGo HTML 端点"""
+    results: list[SearchResult] = []
+    try:
+        with httpx.Client(timeout=15, follow_redirects=True, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        }) as client:
+            resp = client.get(
+                "https://html.duckduckgo.com/html/",
+                params={"q": query},
+            )
+            resp.raise_for_status()
+            html = resp.text
+
+        # 提取结果: class="result__body" 包装每个结果
+        result_blocks = re.findall(
+            r'<div[^>]*class="[^"]*result__body[^"]*"[^>]*>(.*?)</div>\s*</div>',
+            html, re.DOTALL
+        )
+        # 更宽松的匹配
+        if not result_blocks:
+            result_blocks = re.findall(
+                r'class="result__body">(.*?)<div class="result__extras',
+                html, re.DOTALL
+            )
+
+        for block in result_blocks:
+            # 提取标题和链接
+            title_match = re.search(
+                r'<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+                block, re.DOTALL
+            )
+            if not title_match:
+                continue
+
+            raw_url = title_match.group(1)
+            title = re.sub(r'<[^>]+>', '', title_match.group(2)).strip()
+
+            # 解码 DuckDuckGo 重定向 URL
+            url = _decode_ddg_url(raw_url)
+
+            # 提取摘要
+            snippet = ""
+            snippet_match = re.search(
+                r'<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>',
+                block, re.DOTALL
+            )
+            if snippet_match:
+                snippet = re.sub(r'<[^>]+>', '', snippet_match.group(1)).strip()
+
+            if title and url and url not in {r["url"] for r in results}:
+                results.append({"title": title, "url": url, "snippet": snippet})
+                if len(results) >= max_results:
+                    break
+
+        if results:
+            logger.info(f"搜索 '{query[:50]}...' → {len(results)} 条结果")
+    except Exception as e:
+        logger.debug(f"HTML 搜索失败: {e}")
+
+    return results
+
+
+def _search_via_lib(query: str, max_results: int) -> list[SearchResult]:
+    """duckduckgo_search 库兜底"""
     results: list[SearchResult] = []
     try:
         from duckduckgo_search import DDGS
@@ -32,73 +112,48 @@ def web_search(query: str, max_results: int = 5) -> list[SearchResult]:
                     "url": r.get("href", ""),
                     "snippet": r.get("body", ""),
                 })
-        logger.info(f"搜索 '{query[:50]}...' → {len(results)} 条结果")
-    except Exception as e:
-        logger.warning(f"DuckDuckGo 搜索失败: {e}")
-        # 回退: 尝试 requests 直接调用
+        if results:
+            logger.info(f"lib 搜索 '{query[:50]}...' → {len(results)} 条结果")
+    except Exception:
+        # 尝试 ddgs 新库
         try:
-            results = _fallback_search(query, max_results)
+            from ddgs import DDGS
+            with DDGS() as ddgs:
+                for r in ddgs.text(query, max_results=max_results):
+                    results.append({
+                        "title": r.get("title", ""),
+                        "url": r.get("href", ""),
+                        "snippet": r.get("body", ""),
+                    })
+            if results:
+                logger.info(f"ddgs 搜索 '{query[:50]}...' → {len(results)} 条结果")
         except Exception:
-            logger.error("回退搜索也失败了")
+            pass
     return results
 
 
-def _fallback_search(query: str, max_results: int = 5) -> list[SearchResult]:
-    """回退搜索方案"""
-    import requests
-    url = "https://html.duckduckgo.com/html/"
-    resp = requests.get(url, params={"q": query}, timeout=10)
-    # 简单 HTML 解析
-    results: list[SearchResult] = []
-    # 这里用简单的文本分割，避免引入 BeautifulSoup
-    from html.parser import HTMLParser
-
-    class DDParser(HTMLParser):
-        def __init__(self):
-            super().__init__()
-            self.results = []
-            self.in_result = False
-            self.in_link = False
-            self.in_snippet = False
-            self.current = {}
-            self.data = ""
-
-        def handle_starttag(self, tag, attrs):
-            attrs_dict = dict(attrs)
-            if tag == "a" and "result__a" in attrs_dict.get("class", ""):
-                self.in_link = True
-                self.current["url"] = attrs_dict.get("href", "")
-            if tag == "a" and "result__snippet" in attrs_dict.get("class", ""):
-                self.in_snippet = True
-
-        def handle_data(self, data):
-            if self.in_link:
-                self.current["title"] = data.strip()
-            if self.in_snippet:
-                self.current["snippet"] = data.strip()
-
-        def handle_endtag(self, tag):
-            if tag == "a" and self.in_link:
-                self.in_link = False
-            if tag == "a" and self.in_snippet:
-                self.in_snippet = False
-                if self.current.get("title"):
-                    self.results.append(dict(self.current))
-                self.current = {}
-
-    parser = DDParser()
-    parser.feed(resp.text)
-    results = parser.results[:max_results]
-    return results
+def _decode_ddg_url(raw_url: str) -> str:
+    """解码 DuckDuckGo 重定向 URL"""
+    # //duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com
+    if "uddg=" in raw_url:
+        match = re.search(r'uddg=([^&]+)', raw_url)
+        if match:
+            return unquote(match.group(1))
+    # 直接 http(s) 链接
+    if raw_url.startswith("http"):
+        return raw_url
+    # // 开头的链接
+    if raw_url.startswith("//"):
+        return "https:" + raw_url
+    return raw_url
 
 
 def web_fetch(url: str, timeout: int = 15) -> str:
     """
-    抓取网页全文 (markdown 格式)
-    优先用 httpx，回退 requests
+    抓取网页全文文本
     """
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; NewEnergyAgent/1.0; +https://github.com/pai-pixel/new-energy-agent)"
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
     }
     try:
         with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:
@@ -106,14 +161,10 @@ def web_fetch(url: str, timeout: int = 15) -> str:
             resp.raise_for_status()
             html = resp.text
     except Exception as e:
-        logger.warning(f"httpx 抓取 {url} 失败: {e}，尝试 requests")
-        import requests
-        resp = requests.get(url, headers=headers, timeout=timeout)
-        html = resp.text
+        logger.warning(f"抓取 {url} 失败: {e}")
+        return ""
 
-    # 简单提取文本内容 (去除 script/style 标签)
     text = _extract_text(html)
-    # 截断过长的内容 (留给 LLM 处理)
     if len(text) > 8000:
         text = text[:8000] + "\n...(内容过长已截断)"
     return text
@@ -121,15 +172,10 @@ def web_fetch(url: str, timeout: int = 15) -> str:
 
 def _extract_text(html: str) -> str:
     """从 HTML 中提取有用文本"""
-    import re
-    # 移除 script 和 style
     html = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
     html = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.DOTALL | re.IGNORECASE)
-    # 移除 HTML 标签
     text = re.sub(r'<[^>]+>', ' ', html)
-    # 合并空白
     text = re.sub(r'\s+', ' ', text)
-    # 解码常见 HTML 实体
     text = text.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
     text = text.replace('&quot;', '"').replace('&apos;', "'")
     return text.strip()

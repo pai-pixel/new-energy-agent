@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>新能源智能助手</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+/* ═══════════════════════════════════════════ resets ═══════ */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg-primary: #0f0f1a;
+  --bg-secondary: #1a1a2e;
+  --bg-tertiary: #252540;
+  --bg-hover: #2a2a45;
+  --border: #2e2e4a;
+  --text-primary: #e8e8f0;
+  --text-secondary: #9d9db5;
+  --text-muted: #6b6b80;
+  --accent: #22c55e;
+  --accent-dim: #16a34a;
+  --accent-bg: rgba(34,197,94,0.08);
+  --user-bubble: #1e3a5f;
+  --assistant-bubble: #1a1a2e;
+  --danger: #ef4444;
+  --warning: #f59e0b;
+  --font-mono: 'SF Mono','Fira Code','Cascadia Code',monospace;
+  --font-sans: -apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 16px;
+  --shadow: 0 2px 8px rgba(0,0,0,.3);
+}
+html,body{height:100%;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font-sans);font-size:15px;line-height:1.6}
+a{color:var(--accent);text-decoration:none}
+
+/* ═══════════════════════════════════════════ layout ═══════ */
+.app{display:flex;height:100vh;overflow:hidden}
+.sidebar{width:280px;min-width:280px;background:var(--bg-secondary);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto}
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+
+/* ═══════════════════════════════════════════ sidebar ═══════ */
+.sidebar-header{padding:20px 18px 12px;border-bottom:1px solid var(--border)}
+.sidebar-header h1{font-size:18px;font-weight:700;display:flex;align-items:center;gap:8px}
+.sidebar-header h1 .icon{font-size:22px}
+.sidebar-header .subtitle{font-size:12px;color:var(--text-muted);margin-top:4px}
+
+.sidebar-section{padding:14px 18px 8px}
+.sidebar-section h3{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:10px}
+.context-card{background:var(--bg-tertiary);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:8px}
+.context-card .label{font-size:11px;color:var(--text-secondary);margin-bottom:2px}
+.context-card .value{font-size:14px;font-weight:500;color:var(--text-primary)}
+.context-card .value.empty{color:var(--text-muted);font-style:italic}
+.context-status{display:flex;align-items:center;gap:6px;padding:8px 14px;margin:8px 18px;background:var(--accent-bg);border:1px solid rgba(34,197,94,.15);border-radius:var(--radius-sm);font-size:12px;color:var(--accent)}
+.context-status .dot{width:6px;height:6px;background:var(--accent);border-radius:50%}
+
+.sidebar-footer{padding:12px 18px;margin-top:auto;border-top:1px solid var(--border)}
+.btn-reset{width:100%;padding:8px 14px;background:var(--bg-tertiary);color:var(--text-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;font-size:13px;font-family:var(--font-sans);transition:all .15s}
+.btn-reset:hover{background:var(--bg-hover);color:var(--text-primary);border-color:var(--text-muted)}
+
+/* ═══════════════════════════════════════════ main chat ═══════ */
+.chat-header{flex-shrink:0;padding:14px 24px;border-bottom:1px solid var(--border);background:var(--bg-secondary);display:flex;align-items:center}
+.chat-header .title{font-size:15px;font-weight:600}
+.chat-header .badge{font-size:11px;padding:3px 8px;background:var(--accent-bg);color:var(--accent);border-radius:20px;margin-left:10px}
+
+.messages{flex:1;overflow-y:auto;padding:0}
+.messages-inner{max-width:860px;margin:0 auto;padding:20px 0}
+
+/* empty state */
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;text-align:center}
+.empty-state .logo{font-size:56px;margin-bottom:16px}
+.empty-state h2{font-size:22px;margin-bottom:8px;color:var(--text-primary)}
+.empty-state p{color:var(--text-muted);font-size:14px;max-width:420px;margin-bottom:24px}
+.empty-state .hints{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:500px}
+.empty-state .hint{padding:8px 16px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:20px;font-size:13px;color:var(--text-secondary);cursor:pointer;transition:all .15s;font-family:var(--font-sans)}
+.empty-state .hint:hover{background:var(--bg-hover);color:var(--text-primary);border-color:var(--accent);color:var(--accent)}
+
+/* messages */
+.msg{display:flex;gap:14px;padding:18px 24px;border-bottom:1px solid rgba(255,255,255,.03)}
+.msg-user{background:var(--bg-secondary)}
+.msg-assistant{}
+.msg .avatar{flex-shrink:0;width:32px;height:32px;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700}
+.msg-user .avatar{background:var(--accent);color:#fff}
+.msg-assistant .avatar{background:var(--bg-tertiary);color:var(--accent)}
+.msg .body{flex:1;min-width:0;overflow-x:auto}
+.msg .body p{margin-bottom:8px}
+.msg .body p:last-child{margin-bottom:0}
+.msg .body ul,.msg .body ol{padding-left:20px;margin-bottom:8px}
+.msg .body li{margin-bottom:4px}
+.msg .body code{font-family:var(--font-mono);font-size:13px;background:var(--bg-tertiary);padding:2px 6px;border-radius:4px}
+.msg .body pre{background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 16px;overflow-x:auto;margin:8px 0;font-size:13px}
+.msg .body pre code{background:none;padding:0}
+.msg .body table{border-collapse:collapse;width:100%;margin:10px 0;font-size:14px}
+.msg .body th,.msg .body td{border:1px solid var(--border);padding:8px 12px;text-align:left}
+.msg .body th{background:var(--bg-tertiary);font-weight:600;font-size:13px}
+.msg .body strong{color:var(--text-primary);font-weight:600}
+.msg .body em{color:var(--text-secondary)}
+.msg .body blockquote{border-left:3px solid var(--accent);padding-left:14px;color:var(--text-secondary);margin:8px 0}
+.msg .body h2,.msg .body h3,.msg .body h4{margin-top:12px;margin-bottom:6px;font-weight:600}
+.msg .body hr{border:none;border-top:1px solid var(--border);margin:12px 0}
+
+/* ═══════════════════════════════════════════ input area ═══════ */
+.input-area{flex-shrink:0;padding:12px 24px 20px;background:var(--bg-primary)}
+.input-area-inner{max-width:860px;margin:0 auto}
+.input-row{display:flex;gap:10px;align-items:flex-end;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-lg);padding:6px 6px 6px 18px;transition:border-color .2s}
+.input-row:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px rgba(34,197,94,.1)}
+.input-row textarea{flex:1;background:none;border:none;color:var(--text-primary);font-family:var(--font-sans);font-size:14px;line-height:1.5;resize:none;outline:none;padding:8px 0;max-height:160px;min-height:24px}
+.input-row textarea::placeholder{color:var(--text-muted)}
+.btn-send{flex-shrink:0;width:38px;height:38px;background:var(--accent);color:#fff;border:none;border-radius:50%;cursor:pointer;font-size:18px;display:flex;align-items:center;justify-content:center;transition:all .15s;padding:0}
+.btn-send:hover{background:var(--accent-dim);transform:scale(1.05)}
+.btn-send:disabled{background:var(--bg-tertiary);color:var(--text-muted);cursor:not-allowed;transform:none}
+.input-hint{text-align:center;font-size:11px;color:var(--text-muted);margin-top:8px}
+
+/* ═══════════════════════════════════════════ loading ═══════ */
+.typing-indicator{display:flex;gap:5px;padding:4px 0}
+.typing-indicator span{width:7px;height:7px;background:var(--text-muted);border-radius:50%;animation:typing 1.4s infinite}
+.typing-indicator span:nth-child(2){animation-delay:.2s}
+.typing-indicator span:nth-child(3){animation-delay:.4s}
+@keyframes typing{0%,60%,100%{transform:translateY(0);opacity:.4}30%{transform:translateY(-5px);opacity:1}}
+
+/* ═══════════════════════════════════════════ responsive ═══════ */
+@media(max-width:768px){
+  .sidebar{display:none}
+  .msg{padding:14px 16px}
+  .empty-state{padding:40px 16px}
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- ═══ Sidebar ═══ -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <h1><span class="icon">⚡</span>新能源助手</h1>
+      <div class="subtitle">New Energy AI Agent</div>
+    </div>
+
+    <div class="context-status">
+      <span class="dot"></span>
+      <span>AI 对话中 — 上下文由模型自动管理</span>
+    </div>
+
+    <div class="sidebar-section">
+      <h3>会话信息</h3>
+      <div class="context-card">
+        <div class="label">🤖 模型</div>
+        <div class="value" id="modelName">DeepSeek</div>
+      </div>
+      <div class="context-card">
+        <div class="label">💬 本轮消息数</div>
+        <div class="value" id="ctxRound">0</div>
+      </div>
+      <div class="context-card">
+        <div class="label">🔒 安全过滤</div>
+        <div class="value" style="color:var(--accent)">已启用</div>
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <h3>示例问题</h3>
+      <div style="display:flex;flex-direction:column;gap:6px" id="hintList">
+        <button class="btn-reset hint-btn" data-text="上海的上网电价">📊 上海的上网电价</button>
+        <button class="btn-reset hint-btn" data-text="江苏脱硫煤电价">⚡ 江苏脱硫煤电价</button>
+        <button class="btn-reset hint-btn" data-text="北京天气怎么样">🌤️ 北京天气怎么样</button>
+        <button class="btn-reset hint-btn" data-text="光伏补贴最新政策有哪些">📚 光伏补贴最新政策</button>
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      <button class="btn-reset" onclick="resetChat()">🔄 清除对话</button>
+    </div>
+  </aside>
+
+  <!-- ═══ Main ═══ -->
+  <main class="main">
+    <div class="chat-header">
+      <span class="title">对话</span>
+      <span class="badge" id="modelBadge">deepseek-chat</span>
+    </div>
+
+    <div class="messages" id="messages">
+      <div class="messages-inner" id="messagesInner">
+        <div class="empty-state" id="emptyState">
+          <div class="logo">⚡</div>
+          <h2>新能源行业智能助手</h2>
+          <p>我可以帮你查询各省电价、天气，以及新能源政策知识。试试下方的问题吧。</p>
+          <div class="hints">
+            <button class="hint hint-btn" data-text="上海的上网电价">📊 上海的上网电价</button>
+            <button class="hint hint-btn" data-text="江苏脱硫煤电价">⚡ 江苏脱硫煤电价</button>
+            <button class="hint hint-btn" data-text="北京天气怎么样">🌤️ 北京天气</button>
+            <button class="hint hint-btn" data-text="光伏补贴最新政策">📚 光伏补贴政策</button>
+            <button class="hint hint-btn" data-text="广东工商业电价">🏭 广东工商业电价</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="input-area">
+      <div class="input-area-inner">
+        <div class="input-row">
+          <textarea id="userInput" rows="1" placeholder="输入你的问题，例如：上海的上网电价..." onkeydown="handleKey(event)"></textarea>
+          <button class="btn-send" id="sendBtn" onclick="sendMessage()" title="发送">↑</button>
+        </div>
+        <div class="input-hint">按 Enter 发送，Shift+Enter 换行</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════ globals ═══════ */
+let isProcessing = false;
+const input = document.getElementById('userInput');
+const sendBtn = document.getElementById('sendBtn');
+const messagesInner = document.getElementById('messagesInner');
+const messages = document.getElementById('messages');
+const emptyState = document.getElementById('emptyState');
+
+/* ═══════════════════════════════════════════ init ═══════ */
+marked.setOptions({breaks:true,gfm:true});
+
+// Auto-resize textarea
+input.addEventListener('input',()=>{
+  input.style.height='auto';
+  input.style.height=Math.min(input.scrollHeight,160)+'px';
+});
+
+/* ═══════════════════════════════════════════ hint clicks ═══ */
+document.querySelectorAll('.hint-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    input.value=btn.dataset.text;
+    sendMessage();
+  });
+});
+
+/* ═══════════════════════════════════════════ send ═══ */
+function handleKey(e){
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage()}
+}
+
+async function sendMessage(){
+  if(isProcessing)return;
+  const text=input.value.trim();
+  if(!text)return;
+
+  isProcessing=true;
+  sendBtn.disabled=true;
+  input.value='';
+  input.style.height='auto';
+  hideEmpty();
+
+  renderMsg('user',text);
+  const loadingId=renderLoading();
+  messages.scrollTop=messages.scrollHeight;
+
+  try{
+    const resp=await fetch('/api/chat',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:text})
+    });
+    if(!resp.ok){
+      const err=await resp.json();
+      throw new Error(err.detail||'Unknown error');
+    }
+    const data=await resp.json();
+    removeLoading(loadingId);
+    renderMsg('assistant',data.text);
+    updateRound();
+  }catch(e){
+    removeLoading(loadingId);
+    renderMsg('assistant','⚠️ 请求失败：'+e.message);
+  }
+
+  isProcessing=false;
+  sendBtn.disabled=false;
+  input.focus();
+  messages.scrollTop=messages.scrollHeight;
+}
+
+/* ═══════════════════════════════════════════ render ═══ */
+function renderMsg(role,text){
+  const div=document.createElement('div');
+  div.className='msg msg-'+role;
+  const avatarText=role==='user'?'你':'⚡';
+  const avatarEl=`<div class="avatar">${avatarText}</div>`;
+  const bodyText=role==='assistant'?marked.parse(text):escapeHtml(text);
+  div.innerHTML=`${avatarEl}<div class="body">${bodyText}</div>`;
+  messagesInner.appendChild(div);
+}
+
+function renderLoading(){
+  const id='loading_'+Date.now();
+  const div=document.createElement('div');
+  div.className='msg msg-assistant';
+  div.id=id;
+  div.innerHTML=`<div class="avatar">⚡</div><div class="body"><div class="typing-indicator"><span></span><span></span><span></span></div></div>`;
+  messagesInner.appendChild(div);
+  return id;
+}
+
+function removeLoading(id){
+  const el=document.getElementById(id);
+  if(el)el.remove();
+}
+
+function hideEmpty(){
+  if(emptyState)emptyState.style.display='none';
+}
+
+function escapeHtml(text){
+  const map={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
+  return text.replace(/[&<>"']/g,c=>map[c]);
+}
+
+/* ═══════════════════════════════════════════ helpers ═══════ */
+let roundCount = 0;
+function updateRound(){
+  roundCount++;
+  document.getElementById('ctxRound').textContent = roundCount;
+}
+
+async function resetChat(){
+  if(!confirm('确定要清除当前对话吗？'))return;
+  try{await fetch('/api/reset',{method:'POST'})}catch(e){}
+  location.reload();
+}
+
+/* ═══════════════════════════════════════════ init ═══════ */
+input.focus();
+</script>
+</body>
+</html>

@@ -5,6 +5,7 @@
 *.db
 *.db-journal
 *.db-wal
+*.db-shm
 
 # Python
 __pycache__/
@@ -23,3 +24,12 @@ Thumbs.db
 
 # Colab
 .colab/
+
+# Virtual env
+venv/
+
+# API key
+.env
+
+# macOS
+.DS_Store

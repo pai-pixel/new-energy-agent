@@ -1,6 +1,6 @@
 # ⚡ 新能源行业垂直智能体
 
-基于 **Qwen2.5-3B-Instruct (AWQ 4-bit)** 的新能源行业 AI 助手，部署在 **Google Colab Free (T4 GPU)**，通过 Gradio 提供公网 Web 访问。
+基于 **DeepSeek API** 的新能源行业 AI 助手，通过 Gradio 提供 Web Chat 界面。
 
 ## 功能
 
@@ -16,81 +16,118 @@
 ## 架构
 
 ```
-用户 → Gradio Chat UI → Agent 引擎 → vLLM (Qwen2.5-3B)
-                              ├── 电价实时查询 (Web Search → LLM提取 → SQLite缓存)
+用户 → Gradio Chat UI → Agent 引擎 → DeepSeek API
+                              ├── 电价查询 (本地 SQLite 数据库，31省 Mock 数据)
                               ├── 天气查询 (wttr.in)
                               ├── Web 搜索 (DuckDuckGo)
                               └── 安全过滤器 (三层防御)
 ```
 
-## 快速开始（Colab 部署）
+## 快速开始
 
-### 1. 配置 Colab Secrets
+### 1. 获取 DeepSeek API Key
 
-在 Colab 侧边栏 → 🔑 Secrets 面板中添加：
+注册 [DeepSeek 平台](https://platform.deepseek.com)，获取 API Key。
 
-| Secret | 值 | 说明 |
-|--------|-----|------|
-| `HF_TOKEN` | `hf_xxx` | HuggingFace Token（可选） |
-| `NGROK_TOKEN` | `xxx` | ngrok Token（可选） |
+### 2. 配置环境变量
 
-### 2. 运行 Notebook
+```bash
+# 方式一：设置环境变量
+export DEEPSEEK_API_KEY=sk-your-api-key-here
 
-打开 `colab_notebook.ipynb`，从上到下依次运行每个 Cell。
+# 方式二：创建 .env 文件
+cp .env.example .env
+# 编辑 .env，填入你的 API Key
+```
 
-首次运行会从 HuggingFace Hub 下载模型（~2.5GB，约 2-5 分钟），后续运行缓存到 Google Drive。
+### 3. 安装依赖
 
-### 3. 获取公网 URL
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
 
-运行完成后，Cell 7 会输出：
-- Gradio 公网 URL: `https://xxxx.gradio.live`
-- ngrok URL（如已配置）: `https://xxxx.ngrok-free.app`
+### 4. 初始化数据库
+
+```bash
+python3 -m data.seed
+```
+
+### 5. 启动
+
+```bash
+python3 -m src.agent
+```
+
+浏览器打开 `http://localhost:7860`。
 
 ## 项目结构
 
 ```
 new-energy-agent/
-├── colab_notebook.ipynb          # Colab 一键部署 Notebook
 ├── src/
 │   ├── agent.py                  # Agent 主循环 + Gradio UI
-│   ├── config.py                 # 配置 + Secrets 读取 + 省份映射
+│   ├── config.py                 # 配置 + 环境变量读取 + 省份映射
+│   ├── model_engine.py           # DeepSeek API 调用封装
 │   ├── intent_router.py          # 意图分类 + 实体抽取
 │   ├── context_manager.py        # 多轮对话状态管理
 │   ├── safety_guard.py           # 三层安全过滤器
 │   ├── prompt_templates.py       # System Prompt + Few-shot 模板
 │   ├── tools/
-│   │   ├── electricity_query.py  # 电价实时查询 (Search→Fetch→LLM→Cache)
+│   │   ├── electricity_query.py  # 电价查询 (DB优先 + Web搜索兜底)
 │   │   ├── weather_query.py      # wttr.in 天气查询
 │   │   └── web_search.py         # DuckDuckGo 搜索 + 网页抓取
 │   └── visualization/
 │       ├── chart_builder.py      # Plotly 趋势图/对比图
 │       └── table_builder.py      # Dataframe 数据表
+├── data/
+│   ├── db.py                     # SQLite 数据库操作
+│   └── seed.py                   # Mock 数据填充 (31省 × 20月 × 3类型)
 ├── requirements.txt
-└── .env.example                  # 本地开发参考（不含真实值）
+├── .env.example
+└── README.md
 ```
 
 ## 安全机制
 
-| 层级 | 防御 | 位置 |
+| 层级 | 防御 | 说明 |
 |------|------|------|
-| L1 | 关键词正则黑名单 | 推理前 |
+| L1 | 关键词正则黑名单 | 推理前，零 LLM 开销 |
 | L2 | System Prompt 安全指令 | 推理中 |
-| L3 | 领域边界判断 | 推理后 |
+| L3 | 领域边界判断 | 推理后，非新能源领域拒答 |
 
-## 电价数据来源
+## 上下文管理示例
 
-采用 **实时 Web Search + LLM 提取 + SQLite 缓存** 方案：
-- 首次查询某省电价时，自动搜索北极星电力网/发改委等公开页面
-- LLM 从页面文本中提取电价数字
-- 结果写入 SQLite 缓存，同省同月后续查询 < 50ms 返回
-- 无需爬虫，无需定时任务，零维护
+| 轮次 | 用户输入 | 智能体理解 |
+|------|---------|-----------|
+| 1 | "上海的上网电价" | 查询上海上网电价 |
+| 2 | "那江苏呢" | 继承"上网电价"，查江苏 |
+| 3 | "工商业电价呢" | 继承"江苏"，查工商业电价 |
+| 4 | "那天气呢" | 继承"江苏"，查天气 |
 
-## 注意事项
+## 电价数据
 
-- Colab 免费版运行约 4-12 小时后自动断开
-- 模型推理速度约 40 tokens/s
-- 电价数据来自公开网页，仅供参考
-- AI 生成内容请以官方数据为准
+采用 **本地 SQLite 数据库 + Web 搜索兜底** 方案：
+- 预置 31 个省级行政区 × 20 个月 × 3 种电价类型的 Mock 数据
+- 数据库有数据 → 毫秒级返回
+- 数据库无数据 → Web 搜索 + LLM 提取兜底
+
+## 模型接口
+
+模型层预留了可替换接口，当前对接 DeepSeek API (OpenAI 兼容)。
+
+如需切换其他模型，修改 `config.py` 中的配置：
+```python
+LLM_BASE_URL = "https://your-api.com"
+LLM_MODEL = "your-model-name"
+```
+
+或通过环境变量：
+```bash
+export DEEPSEEK_BASE_URL=https://your-api.com
+export DEEPSEEK_MODEL=your-model-name
+```
 
 ## 许可证
 

@@ -3,6 +3,8 @@ Plotly 图表构建器 - 电价趋势折线图 + 多省对比柱状图
 配色: 绿色系 (新能源主题)
 """
 
+from __future__ import annotations
+
 import logging
 from typing import Any
 

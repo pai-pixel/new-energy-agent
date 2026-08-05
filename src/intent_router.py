@@ -1,12 +1,14 @@
 """
-意图路由器 - 基于 Qwen2.5-3B 的意图分类 + 实体抽取
-通过 Prompt Engineering (不微调) 实现精确的意图识别和上下文感知
+意图路由器 - 基于 DeepSeek API 的意图分类 + 实体抽取
+通过 Prompt Engineering 实现精确的意图识别和上下文感知
 """
+
+from __future__ import annotations
 
 import json
 import logging
 import re
-from typing import TypedDict
+from typing import Optional, TypedDict
 
 from src.context_manager import ContextManager
 from src.prompt_templates import build_intent_messages

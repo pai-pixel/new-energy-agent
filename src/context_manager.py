@@ -3,16 +3,19 @@
 支持: 省份继承、电价类型继承、查询类型场景切换
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
+from typing import Optional
 
 
 @dataclass
 class ConversationState:
     """对话状态 - 跟踪当前会话上下文"""
-    current_province: str | None = None       # 当前省份（如 "上海"）
-    current_city: str | None = None           # 当前城市（如 "上海"）
-    current_price_type: str | None = None     # feed_in | desulfurized_coal | commercial_industrial
-    current_query_type: str | None = None     # price_query | weather_query | knowledge_query | chat
+    current_province: Optional[str] = None       # 当前省份（如 "上海"）
+    current_city: Optional[str] = None           # 当前城市（如 "上海"）
+    current_price_type: Optional[str] = None     # feed_in | desulfurized_coal | commercial_industrial
+    current_query_type: Optional[str] = None     # price_query | weather_query | knowledge_query | chat
     round_count: int = 0                      # 会话轮数
     history: list[dict] = field(default_factory=list)  # 最近10轮对话摘要
 

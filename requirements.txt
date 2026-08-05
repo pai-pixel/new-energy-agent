@@ -1,19 +1,19 @@
-# Model loading
-autoawq>=0.2.0
-accelerate>=0.30.0
-transformers>=4.40.0
+# LLM API (OpenAI-compatible)
+openai>=1.0.0
 
-# Web UI
-gradio>=4.0.0
+# Web framework
+fastapi>=0.100.0
+uvicorn>=0.20.0
 
-# Visualization
+# Visualization (kept for chart/table builder)
 plotly>=5.18.0
 pandas>=2.0.0
 
 # Tools
-duckduckgo_search>=5.0.0
 httpx>=0.25.0
 
-# Colab deployment
+# Environment variables
+python-dotenv>=1.0.0
+
+# Colab deployment (optional)
 pyngrok>=7.0.0
-huggingface_hub>=0.20.0

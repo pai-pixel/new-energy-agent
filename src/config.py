@@ -1,10 +1,12 @@
 """
 新能源智能体 - 配置中心
-所有敏感凭证通过环境变量或 Colab Secrets 注入，代码零硬编码 Token。
+所有敏感凭证通过环境变量注入，代码零硬编码 Token。
+模型层: DeepSeek API (OpenAI 兼容)
 """
 
 import os
 import logging
+from typing import Optional
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -12,43 +14,62 @@ logger = logging.getLogger(__name__)
 # ── Secrets 读取 ──────────────────────────────────────────────
 
 
-def _get_secret(name: str, required: bool = True) -> str | None:
-    """优先级: 环境变量 > Colab Secrets > None"""
+def _get_secret(name: str, required: bool = True) -> Optional[str]:
+    """优先级: 环境变量 > .env 文件"""
     val = os.environ.get(name)
     if val:
         return val
+    # 尝试从 .env 文件加载
     try:
-        from google.colab import userdata  # type: ignore
-        val = userdata.get(name)
-        if val:
-            return val
+        from pathlib import Path
+        env_file = Path(__file__).parent.parent / ".env"
+        if env_file.exists():
+            with open(env_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        if k.strip() == name:
+                            val = v.strip().strip('"').strip("'")
+                            if val:
+                                os.environ[name] = val
+                                return val
     except Exception:
         pass
     if required:
         logger.warning(
-            f"未找到密钥 '{name}'。请在 Colab 侧边栏 → 🔑 Secrets → 添加 '{name}'，"
-            f"或设置环境变量 export {name}=xxx"
+            f"未找到密钥 '{name}'。请设置环境变量 export {name}=xxx "
+            f"或在项目根目录 .env 文件中添加 {name}=xxx"
         )
     return None
 
 
-HF_TOKEN = _get_secret("HF_TOKEN", required=False)  # Qwen 模型公开，可留空
+# ── DeepSeek API 配置 ─────────────────────────────────────────
+
+DEEPSEEK_API_KEY = _get_secret("DEEPSEEK_API_KEY", required=False)
+DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
+
+# 兼容旧的环境变量名
+LLM_API_KEY = DEEPSEEK_API_KEY or _get_secret("LLM_API_KEY", required=False) or "your-deepseek-api-key-here"
+LLM_BASE_URL = DEEPSEEK_BASE_URL
+LLM_MODEL = DEEPSEEK_MODEL
+
+# ngrok (Colab 部署用)
 NGROK_TOKEN = _get_secret("NGROK_TOKEN", required=False)
 
-# ── 模型配置 ──────────────────────────────────────────────────
+# ── 模型参数 ──────────────────────────────────────────────────
 
-MODEL_ID = "Qwen/Qwen2.5-3B-Instruct-AWQ"          # HF Hub 模型 ID
-MODEL_CACHE_DIR = "/content/drive/MyDrive/hf_cache"   # Colab Drive 模型缓存路径
-DATA_DIR = os.environ.get(                             # 数据持久化目录（Drive 优先）
-    "NEW_ENERGY_DATA_DIR",
-    "/content/drive/MyDrive/new-energy-data"
-)
-os.makedirs(DATA_DIR, exist_ok=True)                   # 确保目录存在
-MODEL_MAX_TOKENS = 4096                                # 最大生成 tokens
+MODEL_MAX_TOKENS = int(os.environ.get("MODEL_MAX_TOKENS", "4096"))
+MODEL_TEMPERATURE = float(os.environ.get("MODEL_TEMPERATURE", "0.7"))
 
-# 推理后端: "vllm" (快 ~40 tok/s) | "transformers" (稳 ~25 tok/s)
-# 通过环境变量 INFERENCE_BACKEND 控制，默认 vllm
-INFERENCE_BACKEND = os.environ.get("INFERENCE_BACKEND", "vllm")
+# ── 数据路径 ──────────────────────────────────────────────────
+
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.environ.get("NEW_ENERGY_DATA_DIR", os.path.join(PROJECT_DIR, "data"))
+os.makedirs(DATA_DIR, exist_ok=True)
+
+DB_PATH = os.path.join(DATA_DIR, "electricity_prices.db")
 
 # ── 电价类型映射 ──────────────────────────────────────────────
 
@@ -99,21 +120,28 @@ PROVINCE_TO_CITY: dict[str, str] = {
     "澳门": "澳门", "澳门特别行政区": "澳门",
 }
 
-# 城市直接映射回省份的近似
 CITY_TO_PROVINCE: dict[str, str] = {v: k for k, v in PROVINCE_TO_CITY.items()}
+
+# 31 个省级行政区（不含港澳台用于电价查询）
+MAINLAND_PROVINCES: list[str] = [
+    "北京", "上海", "天津", "重庆",
+    "广东", "江苏", "浙江", "山东", "河南", "四川",
+    "湖北", "湖南", "福建", "安徽", "河北", "辽宁",
+    "陕西", "江西", "广西", "山西", "云南", "贵州",
+    "吉林", "黑龙江", "甘肃", "海南", "内蒙古", "宁夏",
+    "青海", "西藏", "新疆",
+]
 
 
 def get_city_for_province(province: str) -> str:
     """根据省份名获取省会城市名"""
-    # 先精确匹配
     city = PROVINCE_TO_CITY.get(province)
     if city:
         return city
-    # 模糊匹配：去掉省/市后缀
     for key, val in PROVINCE_TO_CITY.items():
         if province in key or key in province:
             return val
-    return province  # 兜底返回原名
+    return province
 
 
 def normalize_province(name: str) -> str:
