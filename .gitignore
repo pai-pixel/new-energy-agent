@@ -33,3 +33,4 @@ venv/
 
 # macOS
 .DS_Store
+*.mock_backup
