@@ -122,6 +122,22 @@ class NewEnergyAgent:
     def __init__(self):
         self.messages: list[dict] = []
 
+    def _safe_window(self, max_len: int = 40) -> list[dict]:
+        """截取最近的消息，保证不切断 tool_calls 与其 tool 响应的配对。
+
+        OpenAI 兼容 API 要求每条 role='tool' 的消息前必须有带 tool_calls 的
+        assistant 消息。直接 self.messages[-40:] 切片可能在 tool 消息中间切断，
+        导致 400: 'tool' must be a response to a preceding message with 'tool_calls'。
+        这里向前回退到非 tool 消息，保持结构完整。
+        """
+        messages = self.messages
+        if len(messages) <= max_len:
+            return messages
+        start = len(messages) - max_len
+        while start > 0 and messages[start].get("role") == "tool":
+            start -= 1
+        return messages[start:]
+
     def _execute_tool(self, name: str, args: dict) -> str:
         if name == "query_electricity_price":
             from src.config import normalize_province, PRICE_TYPE_MAP
@@ -176,7 +192,7 @@ class NewEnergyAgent:
         # 循环调用 API，直到模型不再要求调用工具（最多 5 轮，防无限循环）
         max_rounds = 5
         for round_num in range(max_rounds):
-            full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + self.messages[-40:]
+            full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + self._safe_window(40)
 
             try:
                 resp = client.chat.completions.create(
@@ -228,7 +244,7 @@ class NewEnergyAgent:
         try:
             resp = client.chat.completions.create(
                 model=model,
-                messages=[{"role": "system", "content": SYSTEM_PROMPT}] + self.messages[-42:],
+                messages=[{"role": "system", "content": SYSTEM_PROMPT}] + self._safe_window(42),
                 max_tokens=2048, temperature=0.7,
             )
             final_text = resp.choices[0].message.content or ""
