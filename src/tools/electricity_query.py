@@ -8,13 +8,16 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 from datetime import datetime
 from typing import Optional, TypedDict
 
 from src.config import PRICE_TYPE_MAP
 from data.db import query_price, query_latest_price, query_trend, insert_price
 from src.tools.web_search import web_search
+from src.model_engine import generate_json
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +128,30 @@ def query_electricity_price(province: str, year_month: str, price_type: str) -> 
             f"[{i}] {r['title']}\n{r['snippet']}\n链接: {r['url']}"
             for i, r in enumerate(search_results, 1)
         )
-        logger.info(f"搜索到 {len(search_results)} 条结果，交给 Agent 提取价格")
+        logger.info(f"搜索到 {len(search_results)} 条结果")
+
+        # 优先用 LLM 从搜索结果中提取结构化价格 → 入库缓存 → 返回真实价格
+        extracted = _extract_price_with_llm(source_text, province, price_type)
+        if extracted and extracted.get("price"):
+            try:
+                price = float(extracted["price"])
+                insert_price(
+                    province, year_month, price_type, price,
+                    unit="元/千瓦时",
+                    source=source_text[:500],
+                )
+                logger.info(f"✅ 提取并入库: {province} {year_month} {price_type_name} = {price} 元/千瓦时")
+                return {
+                    "province": province, "year_month": year_month, "price_type": price_type,
+                    "price_type_name": price_type_name, "price": price,
+                    "unit": "元/千瓦时", "source": "实时 Web 搜索 (已缓存)",
+                    "cached": False, "trend": [], "search_used": True,
+                }
+            except Exception as e:
+                logger.warning(f"入库失败: {e}")
+
+        # 提取/入库失败 → 退回把搜索结果交给 Agent 提取 (price=-1 特殊标记)
+        logger.info(f"LLM 未能提取价格，退回交给 Agent 提取")
         return {
             "province": province, "year_month": year_month, "price_type": price_type,
             "price_type_name": price_type_name,

@@ -1,27 +1,34 @@
 # ⚡ 新能源行业垂直智能体
 
-基于 **DeepSeek API** 的新能源行业 AI 助手，通过 Gradio 提供 Web Chat 界面。
+基于 **DeepSeek API** 的新能源行业 AI 助手，通过 FastAPI + 静态 HTML 提供 Web Chat 界面。
 
 ## 功能
 
 | 功能 | 说明 |
 |------|------|
-| 📊 上网电价查询 | 按省份 + 月份查询上网电价，含趋势图表 |
+| 📊 上网电价查询 | 按省份 + 月份查询上网电价 |
 | ⚡ 脱硫煤电价查询 | 按省份 + 月份查询脱硫煤标杆电价 |
 | 🏭 工商业电价查询 | 按省份 + 月份查询工商业用电价格 |
 | 🌤️ 天气查询 | 查询各城市实时天气（wttr.in） |
 | 📚 新能源政策知识 | 联网搜索 + AI 综合回答 |
 | 💬 多轮上下文 | 自动继承省份、电价类型，场景随意切换 |
+| 🗄️ 智能缓存 | 首次查询联网搜索真实数据并入库，再次查询秒回（越查越快） |
 
 ## 架构
 
 ```
-用户 → Gradio Chat UI → Agent 引擎 → DeepSeek API
-                              ├── 电价查询 (本地 SQLite 数据库，31省 Mock 数据)
+用户 → Web Chat UI → FastAPI (/api/chat) → Agent 引擎 → DeepSeek API
+                              ├── 电价查询 (SQLite 缓存优先 + Web 搜索兜底)
                               ├── 天气查询 (wttr.in)
                               ├── Web 搜索 (DuckDuckGo)
                               └── 安全过滤器 (三层防御)
 ```
+
+### 电价缓存策略 (hybrid)
+
+1. 查询本地 SQLite 数据库 (`data/electricity_prices.db`) — 命中即秒回
+2. 未命中 → Web 搜索真实数据 → LLM 提取价格 → **写入数据库缓存**
+3. 下次同一省份 + 月份 + 类型直接命中缓存，毫秒级返回
 
 ## 快速开始
 
@@ -48,42 +55,35 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. 初始化数据库
+### 4. 启动
 
 ```bash
-python3 -m data.seed
-```
-
-### 5. 启动
-
-```bash
-python3 -m src.agent
+python src/server.py
 ```
 
 浏览器打开 `http://localhost:7860`。
+
+> 首次查询某省电价会自动联网搜索真实数据并写入 `data/electricity_prices.db`，无需手动初始化数据库。
 
 ## 项目结构
 
 ```
 new-energy-agent/
 ├── src/
-│   ├── agent.py                  # Agent 主循环 + Gradio UI
-│   ├── config.py                 # 配置 + 环境变量读取 + 省份映射
+│   ├── agent.py                  # Agent 主循环 (工具调用 + 上下文管理)
+│   ├── config.py                 # 配置 + 环境变量读取 + 省份/电价类型映射
 │   ├── model_engine.py           # DeepSeek API 调用封装
-│   ├── intent_router.py          # 意图分类 + 实体抽取
-│   ├── context_manager.py        # 多轮对话状态管理
 │   ├── safety_guard.py           # 三层安全过滤器
-│   ├── prompt_templates.py       # System Prompt + Few-shot 模板
-│   ├── tools/
-│   │   ├── electricity_query.py  # 电价查询 (DB优先 + Web搜索兜底)
-│   │   ├── weather_query.py      # wttr.in 天气查询
-│   │   └── web_search.py         # DuckDuckGo 搜索 + 网页抓取
-│   └── visualization/
-│       ├── chart_builder.py      # Plotly 趋势图/对比图
-│       └── table_builder.py      # Dataframe 数据表
+│   ├── server.py                 # FastAPI 后端 (/api/chat, /api/reset)
+│   └── tools/
+│       ├── electricity_query.py  # 电价查询 (DB缓存优先 + Web搜索兜底 + 入库)
+│       ├── weather_query.py      # wttr.in 天气查询
+│       └── web_search.py         # DuckDuckGo 搜索
+├── ui/
+│   └── index.html                # 聊天界面 (静态页, 深色主题)
 ├── data/
 │   ├── db.py                     # SQLite 数据库操作
-│   └── seed.py                   # Mock 数据填充 (31省 × 20月 × 3类型)
+│   └── seed.py                   # (可选) 离线 Mock 数据脚本，默认不使用
 ├── requirements.txt
 ├── .env.example
 └── README.md
@@ -108,10 +108,10 @@ new-energy-agent/
 
 ## 电价数据
 
-采用 **本地 SQLite 数据库 + Web 搜索兜底** 方案：
-- 预置 31 个省级行政区 × 20 个月 × 3 种电价类型的 Mock 数据
-- 数据库有数据 → 毫秒级返回
-- 数据库无数据 → Web 搜索 + LLM 提取兜底
+采用 **Web 搜索真实数据 + 本地 SQLite 缓存** 方案：
+- 数据库无数据 → Web 搜索真实电价 → LLM 提取 → 写入缓存
+- 数据库有数据 → 毫秒级返回（越查越快）
+- 数据来源为公开搜索结果的真实电价，非 Mock 数据
 
 ## 模型接口
 
