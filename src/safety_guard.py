@@ -5,14 +5,17 @@ Layer 2: System Prompt 安全指令 (推理中)
 Layer 3: 领域边界判断 (推理后)
 """
 
-import re
-import logging
+import re                                     # 正则匹配关键词黑名单
+import logging                                # 模块 logger
 
+# 模块级 logger
 logger = logging.getLogger(__name__)
 
 # ── 第一层: 关键词/正则黑名单 ──────────────────────────────────
 
 # 注意: 这些模式按优先级排列，匹配即拦截
+# 格式: (正则表达式, 拦截原因说明)
+# 命中任意一条即直接拒答, 不进 LLM, 零成本且绝对安全
 BLOCKED_PATTERNS: list[tuple[str, str]] = [
     # ── 涉政: 领导人 ──
     (r'习近平', "涉及政治敏感人物"),
@@ -49,7 +52,8 @@ BLOCKED_PATTERNS: list[tuple[str, str]] = [
     (r'共[产匪]|中共.{0,3}(独裁|专制|暴政)', "涉及政治敏感内容"),
 ]
 
-# 编译正则，提升匹配性能
+# 启动时编译所有正则, 提升每次匹配性能(不用每次重新编译)
+# 存为 (编译后Pattern, 原始字符串, 原因), 便于日志里打印原始pattern
 _compiled_patterns: list[tuple[re.Pattern, str, str]] = []
 for _pattern, _reason in BLOCKED_PATTERNS:
     _compiled_patterns.append((re.compile(_pattern, re.IGNORECASE), _pattern, _reason))
@@ -57,22 +61,26 @@ for _pattern, _reason in BLOCKED_PATTERNS:
 
 def check_keywords(text: str) -> tuple[bool, str]:
     """
-    第一层关键词过滤
-    返回: (是否被拦截, 拦截原因)
+    第一层关键词过滤。
+    遍历所有已编译模式, 任一命中即拦截。
+    返回: (是否被拦截, 拦截原因) — 原因用于日志审计和拒答话术。
     """
     for pattern, raw_pattern, reason in _compiled_patterns:
-        if pattern.search(text):
+        if pattern.search(text):                  # 命中一个黑名单模式
+            # 记录原始pattern(便于核对规则) + 输入前50字(便于定位来源, 防刷屏)
             logger.warning(f"安全过滤命中: pattern='{raw_pattern}' reason='{reason}' input='{text[:50]}...'")
             return True, reason
-    return False, ""
+    return False, ""                              # 全部未命中, 放行
 
 
 # ── 第二层: 已在 System Prompt 中注入安全指令 ──────────────────
-# 见 prompt_templates.py 中的 SYSTEM_PROMPT "安全规则" 部分
+# 见 agent.py 中的 SYSTEM_PROMPT "安全红线" 部分
+# 这层是软约束, 由 LLM 自觉遵守, 不在此编码
 
 
 # ── 第三层: 领域边界拒答 ─────────────────────────────────────
 
+# 领域外问题的统一话术, 引导用户回到支持范围
 DOMAIN_BOUNDARY_MESSAGE = """感谢你的关注！我是 **新能源行业垂直智能助手** ⚡，目前专注于以下领域：
 
 📊 **上网电价查询** - 查询各省份不同月份的上网电价（按省份 + 月份）
@@ -92,16 +100,18 @@ DOMAIN_BOUNDARY_MESSAGE = """感谢你的关注！我是 **新能源行业垂直
 
 def check_domain_boundary(intent: str) -> tuple[bool, str]:
     """
-    第三层领域边界检查
+    第三层领域边界检查(推理后)。
+    当意图识别为 out_of_domain 时拒答并给出引导话术。
     返回: (是否在领域外, 拒答文案)
     """
-    if intent == "out_of_domain":
+    if intent == "out_of_domain":                 # 意图分类器标记领域外
         return True, DOMAIN_BOUNDARY_MESSAGE
-    return False, ""
+    return False, ""                              # 在领域内, 放行
 
 
 # ── 安全拒答文案 ──────────────────────────────────────────────
 
+# L1 关键词命中时的统一回复
 SAFETY_BLOCKED_MESSAGE = (
     "抱歉，我检测到你的问题涉及了我无法处理的内容。"
     "作为新能源领域的专业助手，我可以帮你查询电价、天气和新能源政策知识。"
@@ -110,10 +120,10 @@ SAFETY_BLOCKED_MESSAGE = (
 
 
 def is_safety_blocked(llm_response: str) -> bool:
-    """检查 LLM 返回是否包含安全拒答标记"""
+    """检查 LLM 返回是否包含安全拒答标记(模型自我拒答时打标)。"""
     return "[SAFETY_BLOCKED]" in llm_response
 
 
 def is_domain_blocked(llm_response: str) -> bool:
-    """检查 LLM 返回是否包含领域外标记"""
+    """检查 LLM 返回是否包含领域外标记(模型判断越界时打标)。"""
     return "[OUT_OF_DOMAIN]" in llm_response

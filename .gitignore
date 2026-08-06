@@ -7,6 +7,9 @@
 *.db-wal
 *.db-shm
 
+# 运行日志 (logging_config 输出)
+logs/
+
 # Python
 __pycache__/
 *.py[cod]
