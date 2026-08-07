@@ -4,20 +4,20 @@
 - POST /api/chat   对话(单轮), 内部复用 NewEnergyAgent 的多轮循环
 - POST /api/reset  清空对话历史
 - GET  /           返回静态聊天页 ui/index.html
+- GET  /api/logs   返回日志(按请求ID过滤或最近N条), 供前端"查看日志"按钮调用
 """
 
 from __future__ import annotations
 
 import logging                                  # 模块 logger
 from pathlib import Path                        # 定位 UI 静态文件
-from uuid import uuid4                          # 生成请求 ID(与 agent 内的 ID 区分)
 
 from fastapi import FastAPI, HTTPException       # Web 框架 + HTTP 错误
 from fastapi.responses import HTMLResponse       # 返回 HTML 页面
 from pydantic import BaseModel                   # 请求/响应体校验
 
 from src.agent import NewEnergyAgent             # 智能体核心
-from src.logging_config import init_logging     # 幂等初始化日志系统
+from src.logging_config import init_logging, get_request_id, LOG_FILE  # 日志: 初始化/读请求ID/日志文件路径
 
 # 模块级 logger(__name__ = src.server)
 logger = logging.getLogger(__name__)
@@ -40,9 +40,11 @@ class ChatRequest(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    """响应体: text 为回复, status 为空字符串=正常, 'Error'/'Blocked' 表示异常"""
+    """响应体: text 为回复, status 为空字符串=正常, 'Error'/'Blocked' 表示异常,
+    request_id 为本次对话的请求ID(前端据此查询该次日志)"""
     text: str
     status: str = ""
+    request_id: str = ""
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -57,11 +59,37 @@ async def chat(req: ChatRequest):
     try:
         # 调用智能体处理; process 内部会设置请求 ID 并输出带 ID 的日志
         result = agent.process(req.message.strip())
-        return ChatResponse(text=result["text"], status=result.get("status", ""))
+        # get_request_id() 读取 process 内部设置的本次请求ID, 返回给前端
+        return ChatResponse(
+            text=result["text"],
+            status=result.get("status", ""),
+            request_id=get_request_id(),
+        )
     except Exception as e:
         # 兜底: 未捕获异常记录日志并返回 500(前端能提示, 后台能排查)
         logger.error(f"Chat error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/logs")
+async def get_logs(req: str = "", limit: int = 100):
+    """
+    日志查询端点(前端"查看日志"按钮调用)。
+    - req 指定请求ID → 只返回该次对话的日志
+    - req 为空 → 返回最近 limit 条日志
+    limit 限制在 1~500, 防止一次拉太多。
+    """
+    limit = max(1, min(limit, 500))               # 钳制范围, 防滥用
+    try:
+        with open(LOG_FILE, encoding="utf-8") as f:  # 读取日志文件
+            lines = f.readlines()
+    except FileNotFoundError:
+        return {"logs": [], "request_id": req}    # 日志文件还没生成
+    if req:                                        # 按请求ID过滤
+        filtered = [l.rstrip("\n") for l in lines if f"req={req}" in l]
+        return {"logs": filtered[-limit:], "request_id": req}
+    # 全部日志: 取最近 limit 条
+    return {"logs": [l.rstrip("\n") for l in lines][-limit:], "request_id": ""}
 
 
 @app.post("/api/reset")

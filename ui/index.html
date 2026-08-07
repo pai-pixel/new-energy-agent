@@ -118,6 +118,22 @@ a{color:var(--accent);text-decoration:none}
 .typing-indicator span:nth-child(3){animation-delay:.4s}
 @keyframes typing{0%,60%,100%{transform:translateY(0);opacity:.4}30%{transform:translateY(-5px);opacity:1}}
 
+/* ═══════════════════════════════════════════ log viewer modal ═══ */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;display:flex;align-items:center;justify-content:center;padding:24px}
+.modal{width:min(900px,100%);max-height:80vh;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-lg);display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,.5)}
+.modal-header{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--border)}
+.modal-header .modal-sub{font-size:12px;color:var(--text-muted);margin-left:10px}
+.modal-header .modal-sub code{font-family:var(--font-mono);color:var(--accent)}
+.modal-close{background:none;border:none;color:var(--text-muted);font-size:18px;cursor:pointer;padding:4px 8px}
+.modal-close:hover{color:var(--text-primary)}
+.modal-tabs{display:flex;gap:8px;padding:10px 18px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.tab{padding:6px 14px;background:var(--bg-tertiary);color:var(--text-secondary);border:1px solid var(--border);border-radius:20px;font-size:12px;cursor:pointer;font-family:var(--font-sans);transition:all .15s}
+.tab.active{background:var(--accent-bg);color:var(--accent);border-color:rgba(34,197,94,.3)}
+.tab:hover{color:var(--text-primary);border-color:var(--text-muted)}
+.modal-logs{flex:1;overflow:auto;padding:14px 18px;margin:0;font-family:var(--font-mono);font-size:12px;line-height:1.6;color:var(--text-secondary);white-space:pre-wrap;word-break:break-all}
+.modal-logs .req-line{color:var(--text-primary)}
+.modal-empty{flex:1;display:flex;align-items:center;justify-content:center;color:var(--text-muted);padding:40px}
+
 /* ═══════════════════════════════════════════ responsive ═══════ */
 @media(max-width:768px){
   .sidebar{display:none}
@@ -168,6 +184,7 @@ a{color:var(--accent);text-decoration:none}
     </div>
 
     <div class="sidebar-footer">
+      <button class="btn-reset" style="margin-bottom:8px" onclick="openLogs()">📋 查看对话日志</button>
       <button class="btn-reset" onclick="resetChat()">🔄 清除对话</button>
     </div>
   </aside>
@@ -208,9 +225,29 @@ a{color:var(--accent);text-decoration:none}
   </main>
 </div>
 
+<!-- ═══ 日志查看弹窗 ═══ -->
+<div class="modal-overlay" id="logOverlay" style="display:none" onclick="closeLogs(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <div>
+        <strong>📋 对话日志</strong>
+        <span class="modal-sub">当前对话 ID: <code id="logReqId">-</code></span>
+      </div>
+      <button class="modal-close" onclick="closeLogs()" title="关闭">✕</button>
+    </div>
+    <div class="modal-tabs">
+      <button id="tabCurrent" class="tab active" onclick="loadLogs('current')">当前对话</button>
+      <button id="tabAll" class="tab" onclick="loadLogs('all')">全部最近</button>
+      <button class="tab" onclick="copyLogs()">📄 复制日志</button>
+    </div>
+    <pre class="modal-logs" id="logContent">加载中...</pre>
+  </div>
+</div>
+
 <script>
 /* ═══════════════════════════════════════════ globals ═══════ */
 let isProcessing = false;
+let currentReqId = '';   // 最近一次对话的请求ID, 供日志查询
 const input = document.getElementById('userInput');
 const sendBtn = document.getElementById('sendBtn');
 const messagesInner = document.getElementById('messagesInner');
@@ -265,6 +302,7 @@ async function sendMessage(){
       throw new Error(err.detail||'Unknown error');
     }
     const data=await resp.json();
+    currentReqId = data.request_id || '';   // 记录本次对话的请求ID
     removeLoading(loadingId);
     renderMsg('assistant',data.text);
     updateRound();
@@ -325,6 +363,59 @@ async function resetChat(){
   if(!confirm('确定要清除当前对话吗？'))return;
   try{await fetch('/api/reset',{method:'POST'})}catch(e){}
   location.reload();
+}
+
+/* ═══════════════════════════════════════════ log viewer ═══ */
+function openLogs(){
+  document.getElementById('logOverlay').style.display='flex';
+  // 显示当前对话ID(无则提示)
+  document.getElementById('logReqId').textContent = currentReqId || '(尚无对话)';
+  loadLogs('current');   // 默认加载当前对话日志
+}
+
+function closeLogs(e){
+  // 点遮罩或点✕关闭; 点弹窗内部不关闭(stopPropagation已拦截)
+  if(e && e.target !== e.currentTarget) return;
+  document.getElementById('logOverlay').style.display='none';
+}
+
+async function loadLogs(mode){
+  // 切换"当前对话"/"全部最近"标签高亮
+  document.getElementById('tabCurrent').classList.toggle('active', mode==='current');
+  document.getElementById('tabAll').classList.toggle('active', mode==='all');
+  const content=document.getElementById('logContent');
+  content.textContent='加载中...';
+  try{
+    // 当前对话模式且有ID → 带 ?req=ID; 否则拉全部最近
+    const reqParam = (mode==='current' && currentReqId) ? `?req=${currentReqId}` : '';
+    const resp=await fetch('/api/logs'+reqParam);
+    const data=await resp.json();
+    if(!data.logs.length){
+      content.textContent='(该请求暂无日志记录)';
+      return;
+    }
+    // 高亮带请求ID的行, 其余行暗色
+    content.innerHTML = data.logs.map(l=>{
+      const m=l.match(/req=([a-f0-9]{8})/);
+      if(m && (mode==='all')){   // 全部模式: 高亮当前对话相关行
+        const cur = (m[1]===currentReqId);
+        return `<span style="color:${cur?'var(--accent)':'var(--text-secondary)'}">${escapeHtml(l)}</span>`;
+      }
+      return `<span class="req-line">${escapeHtml(l)}</span>`;
+    }).join('\n');
+  }catch(e){
+    content.textContent='⚠️ 日志加载失败: '+e.message;
+  }
+}
+
+function copyLogs(){
+  const content=document.getElementById('logContent');
+  const text=content.innerText||content.textContent;
+  navigator.clipboard.writeText(text).then(()=>{
+    alert('✅ 日志已复制到剪贴板');
+  }).catch(()=>{
+    alert('⚠️ 复制失败, 请手动选择复制');
+  });
 }
 
 /* ═══════════════════════════════════════════ init ═══════ */
